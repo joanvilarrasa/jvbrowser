@@ -3,10 +3,9 @@ import ssl
 import time 
 import gzip
 
-connections = {}
-MAX_REDIRECTS = 10
-
+active_sockets = {}
 responses_cache = {}
+MAX_REDIRECTS = 10
 
 class URL:    
     def __init__(self, url):
@@ -67,10 +66,42 @@ class URL:
                 response = f.read()
                 return self.return_request(response)
 
-        # Create connection key for pooling
+        # Send the request to the server
+        request = self.build_request()
+
+        cached_response = None
+        if self.method == "GET":
+            cached_response = responses_cache.get(self.host + self.path)
+            if cached_response is not None:
+                if cached_response["expires"] > time.time():
+                    # Cache hit
+                    return self.return_request(content = cached_response["content"])
+
+        # Moved the socket after the cache check to avoid opening a connection if the request is cached
+        s = self.get_open_socket()
+        s.send(request.encode("utf8"))
+        
+        # Read the response from the server
+        response = s.makefile("rb")
+        version, status, explanation, response_headers = self.get_response_metadata(response)
+        # Handle redirects
+        if int(status) >= 300 and int(status) < 400:
+            return self.return_request(redirect_url = self.get_response_redirect_url(response_headers))
+
+        # Get the content of the response
+        content = self.get_response_content(response, response_headers)
+
+        # If possible, cache the response
+        if int(status) == 200 and self.method == "GET":
+            self.cache_response(content, response_headers)
+
+        # Return the content of the response
+        return self.return_request(content)
+
+    def get_open_socket(self): 
         connection_key = (self.host, self.port, self.scheme)
         # See if the connection exists
-        s = connections.get(connection_key)
+        s = active_sockets.get(connection_key)
         if s is None:
             s = socket.socket(
                 family=socket.AF_INET,
@@ -83,9 +114,10 @@ class URL:
                 ctx = ssl.create_default_context()
                 s = ctx.wrap_socket(s, server_hostname=self.host)
             # Store the connection
-            connections[connection_key] = s
-
-        # Send the request to the server
+            active_sockets[connection_key] = s
+        return s
+    
+    def build_request(self):
         request = "{} {} HTTP/1.1\r\n".format(self.method, self.path)
         request += "Host: {}\r\n".format(self.host)
         request += "Connection: keep-alive\r\n"
@@ -93,49 +125,7 @@ class URL:
         request += "Accept-Encoding: gzip\r\n"
         request += "\r\n"
 
-        cached_response = None
-        if self.method == "GET":
-            cached_response = responses_cache.get(self.host + self.path)
-            if cached_response is not None:
-                if cached_response["expires"] > time.time():
-                    print("Cache hit")
-                    return self.return_request(cached_response["content"])
-       
-        s.send(request.encode("utf8"))
-        
-        # Read the response from the server
-        response = s.makefile("rb")
-        version, status, explanation, response_headers = self.get_response_metadata(response)
-
-        # If the status is a redirect, return the redirect URL
-        if int(status) >= 300 and int(status) < 400:
-            assert "location" in response_headers
-            redirect_url = response_headers["location"]
-            # If the redirect URL is relative, make it absolute
-            if redirect_url.startswith("/") and self.scheme is not None:
-                redirect_url = self.scheme + "://" + self.host + redirect_url
-            return self.return_request(redirect_url = redirect_url)
-        elif int(status) >= 400:
-            raise Exception("Error: {} {}".format(status, explanation))
-
-        content = self.get_response_content(response, response_headers)
-
-        # If the status is 200, cache the response
-        if int(status) == 200 and self.method == "GET" and responses_cache.get(self.host + self.path) is None:
-            assert "cache-control" in response_headers
-            cache_control = response_headers["cache-control"]
-            # If the cache control contains max-age or no-cache, 
-            if "max-age" in cache_control:
-                print("Caching response for {} seconds".format(cache_control.split("=")[1]))
-                responses_cache[self.host + self.path] = {
-                    "content": content,
-                    "response_headers": response_headers,
-                    "created": time.time(),
-                    "expires": time.time() + int(cache_control.split("=")[1])
-                }
-            # Otherwise do not cache the response
-        # If the status is 200, return the cached response
-        return self.return_request(content)
+        return request
 
     def get_response_metadata(self, response):
         statusline = response.readline().decode("utf8")
@@ -168,6 +158,31 @@ class URL:
             content = response.read().decode("utf8")
         return content
 
+    def get_response_redirect_url(self, response_headers):
+        assert "location" in response_headers
+        assert self.scheme is not None
+        assert self.host is not None
+        redirect_url = response_headers["location"]
+        # If the redirect URL is relative, make it absolute
+        if redirect_url.startswith("/") and self.scheme is not None:
+            redirect_url = self.scheme + "://" + self.host + redirect_url
+        return redirect_url
+    
+    def cache_response(self, content, response_headers):
+        if self.host is not None and responses_cache.get(self.host + self.path) is None:
+            assert "cache-control" in response_headers
+            cache_control = response_headers["cache-control"]
+            # If the cache control contains max-age or no-cache, 
+            if "max-age" in cache_control:
+                print("Caching response for {} seconds".format(cache_control.split("=")[1]))
+                responses_cache[self.host + self.path] = {
+                    "content": content,
+                    "response_headers": response_headers,
+                    "created": time.time(),
+                    "expires": time.time() + int(cache_control.split("=")[1])
+                }
+            # Otherwise do not cache the response
+    
     def return_request(self, content = None, view_source = None, redirect_url = None):
         return content, view_source, redirect_url
 
@@ -181,6 +196,7 @@ def show(body, view_source):
         print(body)
         return
 
+    # TODO: This code is trash, maybe improve it at some point
     in_tag = False
     in_entity = False
     entity = ""
@@ -229,6 +245,7 @@ def load(url):
             raise Exception("Too many redirects")
     show(body, view_source)
 
+    # Test the cache
     body2, view_source2, redirect_url2 = url.request()
 
     redirects = 0
