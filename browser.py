@@ -1,8 +1,11 @@
 import socket
 import ssl
+import time
 
 connections = {}
 MAX_REDIRECTS = 10
+
+responses_cache = {}
 
 class URL:    
     def __init__(self, url):
@@ -13,6 +16,7 @@ class URL:
         self.host = None
         self.path = None
         self.port = None
+        self.method = "GET"
 
         # If the URL starts with view-source: set the flag and remove the scheme
         if url.startswith("data:"):
@@ -81,25 +85,25 @@ class URL:
             connections[connection_key] = s
 
         # Send the request to the server
-        request = "GET {} HTTP/1.1\r\n".format(self.path)
+        request = "{} {} HTTP/1.1\r\n".format(self.method, self.path)
         request += "Host: {}\r\n".format(self.host)
         request += "Connection: keep-alive\r\n"
         request += "User-Agent: jvbrowser/1.0\r\n"
         request += "\r\n"
+
+        cached_response = None
+        if self.method == "GET":
+            cached_response = responses_cache.get(self.host + self.path)
+            if cached_response is not None:
+                if cached_response["expires"] > time.time():
+                    print("Cache hit")
+                    return self.return_request(cached_response["content"])
+       
         s.send(request.encode("utf8"))
         
         # Read the response from the server
         response = s.makefile("rb")
-        statusline = response.readline().decode("utf8")
-        version, status, explanation = statusline.split(" ", 2)
-        response_headers = {}
-        while True:
-            line = response.readline().decode("utf8")
-            if line == "\r\n": break
-            header, value = line.split(":", 1)
-            response_headers[header.casefold()] = value.strip()
-        assert "transfer-encoding" not in response_headers
-        assert "content-encoding" not in response_headers
+        version, status, explanation, response_headers = self.get_response_metadata(response)
 
         # If the status is a redirect, return the redirect URL
         if int(status) >= 300 and int(status) < 400:
@@ -111,8 +115,40 @@ class URL:
             return self.return_request(redirect_url = redirect_url)
         elif int(status) >= 400:
             raise Exception("Error: {} {}".format(status, explanation))
-        
-        # Read only up to content length
+
+        content = self.get_response_content(response, response_headers)
+
+        # If the status is 200, cache the response
+        if int(status) == 200 and self.method == "GET" and responses_cache.get(self.host + self.path) is None:
+            assert "cache-control" in response_headers
+            cache_control = response_headers["cache-control"]
+            # If the cache control contains max-age or no-cache, 
+            if "max-age" in cache_control:
+                print("Caching response for {} seconds".format(cache_control.split("=")[1]))
+                responses_cache[self.host + self.path] = {
+                    "content": content,
+                    "response_headers": response_headers,
+                    "created": time.time(),
+                    "expires": time.time() + int(cache_control.split("=")[1])
+                }
+            # Otherwise do not cache the response
+        # If the status is 200, return the cached response
+        return self.return_request(content)
+
+    def get_response_metadata(self, response):
+        statusline = response.readline().decode("utf8")
+        version, status, explanation = statusline.split(" ", 2)
+        response_headers = {}
+        while True:
+            line = response.readline().decode("utf8")
+            if line == "\r\n": break
+            header, value = line.split(":", 1)
+            response_headers[header.casefold()] = value.strip()
+        assert "transfer-encoding" not in response_headers
+        assert "content-encoding" not in response_headers
+        return version, status, explanation, response_headers
+
+    def get_response_content(self, response, response_headers):
         if "content-length" in response_headers:
             content_length = int(response_headers["content-length"])
             content = response.read(content_length).decode("utf8")
@@ -120,7 +156,7 @@ class URL:
             # If we did not find content length, read all the content
             print("No content length")
             content = response.read().decode("utf8")
-        return self.return_request(content)
+        return content
 
     def return_request(self, content = None, view_source = None, redirect_url = None):
         return content, view_source, redirect_url
@@ -182,6 +218,16 @@ def load(url):
         if redirects > MAX_REDIRECTS:
             raise Exception("Too many redirects")
     show(body, view_source)
+
+    body2, view_source2, redirect_url2 = url.request()
+
+    redirects = 0
+    while redirect_url2 is not None:
+        body2, view_source2, redirect_url2 = URL(redirect_url2).request()
+        redirects += 1
+        if redirects > MAX_REDIRECTS:
+            raise Exception("Too many redirects")
+    show(body2, view_source2)
 
 if __name__ == "__main__":
     import sys
