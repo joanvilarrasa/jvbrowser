@@ -3,9 +3,16 @@ import ssl
 
 class URL:
     def __init__(self, url):
+        if url.startswith("data:"):
+            self.scheme = "data"
+            self.mediatype, self.data = url.split(",", 1)
+            self.host = None
+            self.path = None
+            return
+
         # Split the URL into scheme, host, and path
         self.scheme, url = url.split("://", 1)
-        assert self.scheme in ["http", "https", "file"]
+        assert self.scheme in ["http", "https", "file", "data"]
         # Set the default port for the scheme
         if self.scheme == "http":
             self.port = 80
@@ -13,6 +20,10 @@ class URL:
             self.port = 443
         elif self.scheme == "file":
             self.port = None
+        elif self.scheme == "data":
+            self.port = None
+
+        # Parse the hoset and the path
         if "/" not in url:
             url = url + "/"
         self.host, url = url.split("/", 1)
@@ -23,6 +34,11 @@ class URL:
             self.port = int(port)
 
     def request(self):
+        if self.scheme == "data":
+            return self.data
+        if self.host is None:
+            raise ValueError("Invalid host: {}".format(self.host))
+
         # Create a socket for the connection
         s = socket.socket(
             family=socket.AF_INET,
@@ -67,6 +83,10 @@ class URL:
         return content
 
 def show(body):
+    if not body.startswith("<"):
+        print(body)
+        return
+
     in_tag = False
     for c in body:
         if c == "<":
