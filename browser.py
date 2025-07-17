@@ -1,6 +1,7 @@
 import socket
 import ssl
-import time
+import time 
+import gzip
 
 connections = {}
 MAX_REDIRECTS = 10
@@ -89,6 +90,7 @@ class URL:
         request += "Host: {}\r\n".format(self.host)
         request += "Connection: keep-alive\r\n"
         request += "User-Agent: jvbrowser/1.0\r\n"
+        request += "Accept-Encoding: gzip\r\n"
         request += "\r\n"
 
         cached_response = None
@@ -145,11 +147,19 @@ class URL:
             header, value = line.split(":", 1)
             response_headers[header.casefold()] = value.strip()
         assert "transfer-encoding" not in response_headers
-        assert "content-encoding" not in response_headers
         return version, status, explanation, response_headers
 
     def get_response_content(self, response, response_headers):
-        if "content-length" in response_headers:
+        if "content-encoding" in response_headers:
+            assert response_headers["content-encoding"] == "gzip"
+            if "content-length" in response_headers:
+                content_length = int(response_headers["content-length"])
+                compressed_content = response.read(content_length)
+            else:
+                # If no content length, read until connection closes
+                compressed_content = response.read()
+            content = gzip.decompress(compressed_content).decode("utf8")
+        elif "content-length" in response_headers:
             content_length = int(response_headers["content-length"])
             content = response.read(content_length).decode("utf8")
         else:
