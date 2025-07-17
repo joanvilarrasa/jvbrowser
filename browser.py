@@ -1,7 +1,9 @@
 import socket
 import ssl
 
-class URL:
+connections = {}
+
+class URL:    
     def __init__(self, url):
         self.view_source = False
         self.scheme = None
@@ -53,47 +55,59 @@ class URL:
         if self.host is None:
             raise ValueError("Invalid host: {}".format(self.host))
 
-        # Create a socket for the connection
-        s = socket.socket(
-            family=socket.AF_INET,
-            type=socket.SOCK_STREAM,
-            proto=socket.IPPROTO_TCP,
-        )
-
         # If the scheme is file, open the file specified by combining the host and path as a binary
         if self.scheme == "file":
             with open(self.host + self.path, encoding="utf8", newline="\r\n") as f:
                 response = f.read()
                 return response, self.view_source
 
-        # Otherwise, connect to the server
-        s.connect((self.host, self.port))
-        # Wrap the socket in an SSL context if the scheme is https
-        if self.scheme == "https":
-            ctx = ssl.create_default_context()
-            s = ctx.wrap_socket(s, server_hostname=self.host)
+        # Create connection key for pooling
+        connection_key = (self.host, self.port, self.scheme)
+        # See if the connection exists
+        s = connections.get(connection_key)
+        if s is None:
+            s = socket.socket(
+                family=socket.AF_INET,
+                type=socket.SOCK_STREAM,
+                proto=socket.IPPROTO_TCP,
+            )
+            s.connect((self.host, self.port))
+            # Wrap the socket in an SSL context if the scheme is https
+            if self.scheme == "https":
+                ctx = ssl.create_default_context()
+                s = ctx.wrap_socket(s, server_hostname=self.host)
+            # Store the connection
+            connections[connection_key] = s
+
         # Send the request to the server
         request = "GET {} HTTP/1.1\r\n".format(self.path)
         request += "Host: {}\r\n".format(self.host)
-        request += "Connection: close\r\n"
+        request += "Connection: keep-alive\r\n"
         request += "User-Agent: jvbrowser/1.0\r\n"
         request += "\r\n"
         s.send(request.encode("utf8"))
+        
         # Read the response from the server
-        response = s.makefile("r", encoding="utf8", newline="\r\n")
-        statusline = response.readline()
+        response = s.makefile("rb")
+        statusline = response.readline().decode("utf8")
         version, status, explanation = statusline.split(" ", 2)
         response_headers = {}
         while True:
-            line = response.readline()
+            line = response.readline().decode("utf8")
             if line == "\r\n": break
             header, value = line.split(":", 1)
             response_headers[header.casefold()] = value.strip()
         assert "transfer-encoding" not in response_headers
         assert "content-encoding" not in response_headers
-        # Read the content from the response
-        content = response.read()
-        s.close()
+        
+        # Read only up to content length
+        if "content-length" in response_headers:
+            content_length = int(response_headers["content-length"])
+            content = response.read(content_length).decode("utf8")
+        else:
+            # If we did not find content length, read all the content
+            print("No content length")
+            content = response.read().decode("utf8")
         return content, self.view_source
 
 def show(body, view_source):
@@ -146,6 +160,8 @@ def decode_entity(entity):
 def load(url):
     body, view_source = url.request()
     show(body, view_source)
+    body2, view_source2 = url.request()
+    show(body2, view_source2)
 
 if __name__ == "__main__":
     import sys
