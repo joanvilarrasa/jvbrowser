@@ -5,12 +5,14 @@ class URL:
     def __init__(self, url):
         # Split the URL into scheme, host, and path
         self.scheme, url = url.split("://", 1)
-        assert self.scheme in ["http", "https"]
+        assert self.scheme in ["http", "https", "file"]
         # Set the default port for the scheme
         if self.scheme == "http":
             self.port = 80
         elif self.scheme == "https":
             self.port = 443
+        elif self.scheme == "file":
+            self.port = None
         if "/" not in url:
             url = url + "/"
         self.host, url = url.split("/", 1)
@@ -27,6 +29,14 @@ class URL:
             type=socket.SOCK_STREAM,
             proto=socket.IPPROTO_TCP,
         )
+
+        # If the scheme is file, open the file specified by combining the host and path as a binary
+        if self.scheme == "file":
+            with open(self.host + self.path, encoding="utf8", newline="\r\n") as f:
+                response = f.read()
+                return response
+
+        # Otherwise, connect to the server
         s.connect((self.host, self.port))
         # Wrap the socket in an SSL context if the scheme is https
         if self.scheme == "https":
