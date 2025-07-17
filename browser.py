@@ -88,13 +88,41 @@ def show(body):
         return
 
     in_tag = False
+    in_entity = False
+    entity = ""
     for c in body:
         if c == "<":
             in_tag = True
         elif c == ">":
             in_tag = False
-        elif not in_tag:
+        elif c == "&":
+            entity = "&"
+            in_entity = True
+        elif c == ";":
+            entity += c
+            decoded_entity = decode_entity(entity)
+            if decoded_entity is not None:
+                print(decoded_entity, end="")
+            else:
+                print(entity, end="")
+            entity = ""
+            in_entity = False
+        elif in_entity:
+            entity += c
+            if len(entity) > 5:
+                print(entity, end="")
+                entity = ""
+                in_entity = False      
+        elif not in_tag and not in_entity:
             print(c, end="")
+
+def decode_entity(entity):
+    if entity == "&lt;":
+        return "<"
+    elif entity == "&gt;":
+        return ">"
+    else:
+        return None
 
 def load(url):
     body = url.request()
