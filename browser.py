@@ -2,6 +2,7 @@ import socket
 import ssl
 
 connections = {}
+MAX_REDIRECTS = 10
 
 class URL:    
     def __init__(self, url):
@@ -51,7 +52,7 @@ class URL:
 
     def request(self):
         if self.scheme == "data":
-            return self.data, self.view_source
+            return self.return_request(self.data)
         if self.host is None:
             raise ValueError("Invalid host: {}".format(self.host))
 
@@ -59,7 +60,7 @@ class URL:
         if self.scheme == "file":
             with open(self.host + self.path, encoding="utf8", newline="\r\n") as f:
                 response = f.read()
-                return response, self.view_source
+                return self.return_request(response)
 
         # Create connection key for pooling
         connection_key = (self.host, self.port, self.scheme)
@@ -99,6 +100,17 @@ class URL:
             response_headers[header.casefold()] = value.strip()
         assert "transfer-encoding" not in response_headers
         assert "content-encoding" not in response_headers
+
+        # If the status is a redirect, return the redirect URL
+        if int(status) >= 300 and int(status) < 400:
+            assert "location" in response_headers
+            redirect_url = response_headers["location"]
+            # If the redirect URL is relative, make it absolute
+            if redirect_url.startswith("/") and self.scheme is not None:
+                redirect_url = self.scheme + "://" + self.host + redirect_url
+            return self.return_request(redirect_url = redirect_url)
+        elif int(status) >= 400:
+            raise Exception("Error: {} {}".format(status, explanation))
         
         # Read only up to content length
         if "content-length" in response_headers:
@@ -108,7 +120,10 @@ class URL:
             # If we did not find content length, read all the content
             print("No content length")
             content = response.read().decode("utf8")
-        return content, self.view_source
+        return self.return_request(content)
+
+    def return_request(self, content = None, view_source = None, redirect_url = None):
+        return content, view_source, redirect_url
 
 def show(body, view_source):
     if not body.startswith("<"):
@@ -158,10 +173,15 @@ def decode_entity(entity):
         return None
 
 def load(url):
-    body, view_source = url.request()
+    body, view_source, redirect_url = url.request()
+
+    redirects = 0
+    while redirect_url is not None:
+        body, view_source, redirect_url = URL(redirect_url).request()
+        redirects += 1
+        if redirects > MAX_REDIRECTS:
+            raise Exception("Too many redirects")
     show(body, view_source)
-    body2, view_source2 = url.request()
-    show(body2, view_source2)
 
 if __name__ == "__main__":
     import sys
