@@ -3,12 +3,26 @@ import ssl
 
 class URL:
     def __init__(self, url):
+        self.view_source = False
+        self.scheme = None
+        self.mediatype = None
+        self.data = None
+        self.host = None
+        self.path = None
+        self.port = None
+
+        # If the URL starts with view-source: set the flag and remove the scheme
         if url.startswith("data:"):
             self.scheme = "data"
             self.mediatype, self.data = url.split(",", 1)
-            self.host = None
-            self.path = None
             return
+
+        if url.startswith("view-source:"):
+            # If the URL starts with view-source: set the flag and remove the scheme
+            self.view_source = True
+            url = url[12:]
+        else:
+            self.view_source = False
 
         # Split the URL into scheme, host, and path
         self.scheme, url = url.split("://", 1)
@@ -35,7 +49,7 @@ class URL:
 
     def request(self):
         if self.scheme == "data":
-            return self.data
+            return self.data, self.view_source
         if self.host is None:
             raise ValueError("Invalid host: {}".format(self.host))
 
@@ -50,7 +64,7 @@ class URL:
         if self.scheme == "file":
             with open(self.host + self.path, encoding="utf8", newline="\r\n") as f:
                 response = f.read()
-                return response
+                return response, self.view_source
 
         # Otherwise, connect to the server
         s.connect((self.host, self.port))
@@ -80,10 +94,15 @@ class URL:
         # Read the content from the response
         content = response.read()
         s.close()
-        return content
+        return content, self.view_source
 
-def show(body):
+def show(body, view_source):
     if not body.startswith("<"):
+        print(body)
+        return
+
+    # If the view source flag is set, do not parse the body as HTML. Just print it as is.
+    if view_source:
         print(body)
         return
 
@@ -125,8 +144,8 @@ def decode_entity(entity):
         return None
 
 def load(url):
-    body = url.request()
-    show(body)
+    body, view_source = url.request()
+    show(body, view_source)
 
 if __name__ == "__main__":
     import sys
