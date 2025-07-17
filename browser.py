@@ -33,8 +33,10 @@ class URL:
             ctx = ssl.create_default_context()
             s = ctx.wrap_socket(s, server_hostname=self.host)
         # Send the request to the server
-        request = "GET {} HTTP/1.0\r\n".format(self.path)
+        request = "GET {} HTTP/1.1\r\n".format(self.path)
         request += "Host: {}\r\n".format(self.host)
+        request += "Connection: close\r\n"
+        request += "User-Agent: jvbrowser/1.0\r\n"
         request += "\r\n"
         s.send(request.encode("utf8"))
         # Read the response from the server
