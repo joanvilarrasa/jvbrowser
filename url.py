@@ -18,46 +18,57 @@ class URL:
         self.port = None
         self.method = "GET"
         self.redirects = 0
+        self.is_valid_url = True
         self.init_url(url)
 
     def init_url(self, url):
-        # If the URL starts with view-source: set the flag and remove the scheme
-        if url.startswith("data:"):
-            self.scheme = "data"
-            self.mediatype, self.data = url.split(",", 1)
-            return
-
-        if url.startswith("view-source:"):
+        try:
             # If the URL starts with view-source: set the flag and remove the scheme
-            self.view_source = True
-            url = url[12:]
-        else:
-            self.view_source = False
+            if url.startswith("data:"):
+                self.scheme = "data"
+                self.mediatype, self.data = url.split(",", 1)
+                return
 
-        # Split the URL into scheme, host, and path
-        self.scheme, url = url.split("://", 1)
-        assert self.scheme in ["http", "https", "file", "data"]
-        # Set the default port for the scheme
-        if self.scheme == "http":
-            self.port = 80
-        elif self.scheme == "https":
-            self.port = 443
-        elif self.scheme == "file":
-            self.port = None
-        elif self.scheme == "data":
-            self.port = None
+            print("url", url)
+            if url.startswith("view-source:"):
+                # If the URL starts with view-source: set the flag and remove the scheme
+                self.view_source = True
+                url = url[12:]
+            else:
+                self.view_source = False
 
-        # Parse the hoset and the path
-        if "/" not in url:
-            url = url + "/"
-        self.host, url = url.split("/", 1)
-        self.path = "/" + url
-        # If the host contains a port, use it instead of the default port
-        if ":" in self.host:
-            self.host, port = self.host.split(":", 1)
-            self.port = int(port)
+            # Split the URL into scheme, host, and path
+            self.scheme, url = url.split("://", 1)
+            assert self.scheme in ["http", "https", "file", "data"]
+            # Set the default port for the scheme
+            if self.scheme == "http":
+                self.port = 80
+            elif self.scheme == "https":
+                self.port = 443
+            elif self.scheme == "file":
+                self.port = None
+            elif self.scheme == "data":
+                self.port = None
+
+            # Parse the hoset and the path
+            if "/" not in url:
+                url = url + "/"
+            self.host, url = url.split("/", 1)
+            self.path = "/" + url
+            # If the host contains a port, use it instead of the default port
+            if ":" in self.host:
+                self.host, port = self.host.split(":", 1)
+                self.port = int(port)
+            
+        except Exception as e:
+            self.scheme = "about:blank"
+            self.url = "about:blank"
+            self.is_valid_url = False
     
     def request(self):
+        if not self.is_valid_url:
+            return ""
+        
         if self.scheme == "data":
             return self.data
         if self.host is None:

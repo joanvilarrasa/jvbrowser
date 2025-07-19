@@ -44,7 +44,10 @@ class Browser:
         text = lex(body)
         self.content["text"] = text
         self.content["display_list"] = layout(self.content["text"], self.canvas.winfo_width() - self.scroll["bar_width"])
-        self.scroll["max"] = self.content["display_list"][-1][1]
+        if len(self.content["display_list"]) > 0:
+            self.scroll["max"] = self.content["display_list"][-1][1]
+        else:
+            self.scroll["max"] = 0
         self.draw()
 
     def draw(self):
@@ -58,7 +61,7 @@ class Browser:
                 emoji_image = self.emoji_provider.load_emoji_image(c)
                 if emoji_image:
                     # Display emoji as image
-                    self.canvas.create_image(x, y - self.scroll["value"], image=emoji_image, anchor="nw")
+                    self.canvas.create_image(x, y - self.scroll["value"], image=emoji_image)
                 else:
                     # Fallback to text if image not found
                     self.canvas.create_text(x, y - self.scroll["value"], text=c)
@@ -93,7 +96,10 @@ class Browser:
     def resize(self, e):
         self.canvas.config(width=e.width, height=e.height)
         self.content["display_list"] = layout(self.content["text"], e.width - self.scroll["bar_width"])
-        self.scroll["max"] = self.content["display_list"][-1][1] - self.canvas.winfo_height()
+        if len(self.content["display_list"]) > 0:
+            self.scroll["max"] = self.content["display_list"][-1][1] - self.canvas.winfo_height()
+        else:
+            self.scroll["max"] = 0
         self.scroll["show"] = self.scroll["max"] > 0
         self.draw()
 
