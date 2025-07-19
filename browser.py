@@ -1,5 +1,8 @@
+from emoji import EmojiProvider, is_emoji
 from url import URL, lex
 import tkinter
+import os
+import unicodedata
 
 WIDTH, HEIGHT = 800, 600
 HSTEP, VSTEP = 13, 18
@@ -27,6 +30,7 @@ class Browser:
             "show": False,
             "bar_width": 10,
         }
+        self.emoji_provider = EmojiProvider()
 
         # Setup bindings
         self.window.bind("<Configure>", self.resize)
@@ -48,7 +52,19 @@ class Browser:
         for x, y, c in self.content["display_list"]:
             if y > self.scroll["value"] + self.canvas.winfo_height(): continue
             if y + VSTEP < self.scroll["value"]: continue
-            self.canvas.create_text(x, y - self.scroll["value"], text=c)
+
+            # Check if character is an emoji
+            if is_emoji(c):
+                emoji_image = self.emoji_provider.load_emoji_image(c)
+                if emoji_image:
+                    # Display emoji as image
+                    self.canvas.create_image(x, y - self.scroll["value"], image=emoji_image, anchor="nw")
+                else:
+                    # Fallback to text if image not found
+                    self.canvas.create_text(x, y - self.scroll["value"], text=c)
+            else:
+                # Display regular text
+                self.canvas.create_text(x, y - self.scroll["value"], text=c)
 
         if self.scroll["show"]:
             bar_height = self.canvas.winfo_height() * self.canvas.winfo_height() / self.scroll["max"]
@@ -81,7 +97,6 @@ class Browser:
         self.scroll["show"] = self.scroll["max"] > 0
         self.draw()
 
-    
 
 
 # Helpers
