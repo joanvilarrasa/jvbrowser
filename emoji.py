@@ -1,7 +1,6 @@
 import os
 import tkinter
 import unicodedata
-
 class EmojiProvider:
 
     def __init__(self):

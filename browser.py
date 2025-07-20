@@ -1,9 +1,11 @@
 from emoji import EmojiProvider, is_emoji
-from url import URL, lex
+from tag import Tag
+from text import Text
+from url import URL
+from layout import Layout, lex
 import tkinter
 
 WIDTH, HEIGHT = 800, 600
-HSTEP, VSTEP = 13, 18
 SCROLL_STEP = 100
 
 class Browser:
@@ -45,14 +47,14 @@ class Browser:
 
     def load(self, url):
         body = url.request()
-        text = lex(body)
-        self.content["text"] = text
-        self.content["display_list"] = layout(
-            self.content["text"], 
+        tokens = lex(body)
+        self.content["tokens"] = tokens
+        self.content["display_list"] = Layout(
+            self.content["tokens"], 
             self.canvas.winfo_width() - self.scroll["bar_width"],
             self.layout_config["text_direction"],
             self.layout_config["text_align"]
-        )
+        ).display_list
         if len(self.content["display_list"]) > 0:
             self.scroll["max"] = self.content["display_list"][-1][1]
         else:
@@ -61,22 +63,22 @@ class Browser:
 
     def draw(self):
         self.canvas.delete("all")
-        for x, y, c in self.content["display_list"]:
+        for x, y, text, font in self.content["display_list"]:
             if y > self.scroll["value"] + self.canvas.winfo_height(): continue
-            if y + VSTEP < self.scroll["value"]: continue
+            if y + font.metrics("linespace") * 1.25 < self.scroll["value"]: continue
 
             # Check if character is an emoji
-            if is_emoji(c):
-                emoji_image = self.emoji_provider.load_emoji_image(c)
-                if emoji_image:
-                    # Display emoji as image
-                    self.canvas.create_image(x, y - self.scroll["value"], image=emoji_image)
+            if len(text) == 1:
+                if is_emoji(text[0]):
+                    emoji_image = self.emoji_provider.load_emoji_image(text[0])
+                    if emoji_image:
+                        self.canvas.create_image(x, y - self.scroll["value"], image=emoji_image, anchor='nw')
+                    else:
+                        self.canvas.create_text(x, y - self.scroll["value"], text=text, font=font, anchor='nw')
                 else:
-                    # Fallback to text if image not found
-                    self.canvas.create_text(x, y - self.scroll["value"], text=c)
+                    self.canvas.create_text(x, y - self.scroll["value"], text=text, font=font, anchor='nw')
             else:
-                # Display regular text
-                self.canvas.create_text(x, y - self.scroll["value"], text=c)
+                self.canvas.create_text(x, y - self.scroll["value"], text=text, font=font, anchor='nw')
 
         if self.scroll["show"]:
             bar_height = self.canvas.winfo_height() * self.canvas.winfo_height() / self.scroll["max"]
@@ -104,12 +106,12 @@ class Browser:
 
     def resize(self, e):
         self.canvas.config(width=e.width, height=e.height)
-        self.content["display_list"] = layout(
-            self.content["text"], 
+        self.content["display_list"] = Layout(
+            self.content["tokens"], 
             e.width - self.scroll["bar_width"],
             self.layout_config["text_direction"],
             self.layout_config["text_align"]
-        )
+        ).display_list
         if len(self.content["display_list"]) > 0:
             self.scroll["max"] = self.content["display_list"][-1][1] - self.canvas.winfo_height()
         else:
@@ -117,55 +119,6 @@ class Browser:
         self.scroll["show"] = self.scroll["max"] > 0
         self.draw()
 
-
-
-# Helpers
-def layout(text, max_width, text_direction="ltr", text_align="left"):
-    display_list = []
-
-    if text_direction == "rtl":
-        cursor_x_initial_value = max_width - HSTEP
-        cursor_x_increment = -HSTEP
-        cursor_x_max_value = HSTEP
-    else:
-        cursor_x_initial_value = HSTEP
-        cursor_x_increment = HSTEP
-        cursor_x_max_value = max_width - HSTEP
-
-    cursor_x = cursor_x_initial_value
-    cursor_y = VSTEP
-
-    current_line = []
-    for c in text: 
-        current_line.append((cursor_x, cursor_y, c))
-        cursor_x += cursor_x_increment
-        if c == "\n":
-            if text_direction == "rtl" and text_align == "left":
-                offset_line_x(current_line, -cursor_x)
-            elif text_direction == "ltr" and text_align == "right":
-                offset_line_x(current_line, max_width - cursor_x)
-
-            display_list.extend(current_line)
-            current_line = []
-            cursor_y += VSTEP * 1.5
-            cursor_x = cursor_x_initial_value
-        elif cursor_x_overflow(cursor_x, cursor_x_max_value, text_direction):
-            display_list.extend(current_line)
-            current_line = []
-            cursor_y += VSTEP
-            cursor_x = cursor_x_initial_value
-    return display_list
-
-def cursor_x_overflow(cursor_x, cursor_x_max_value, text_direction):
-    if text_direction == "ltr":
-        return cursor_x >= cursor_x_max_value
-    else:
-        return cursor_x <= cursor_x_max_value
-
-def offset_line_x(line, offset):
-    for i in range(len(line)):
-        cursor_x, cursor_y, c = line[i]
-        line[i] = (cursor_x + offset, cursor_y, c)
 
 
 if __name__ == "__main__":
