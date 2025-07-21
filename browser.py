@@ -1,8 +1,7 @@
 from emoji import EmojiProvider, is_emoji
-from tag import Tag
-from text import Text
+from htmlparser import HTMLParser, print_tree
 from url import URL
-from layout import Layout, lex
+from layout import Layout
 import tkinter
 
 WIDTH, HEIGHT = 800, 600
@@ -45,22 +44,6 @@ class Browser:
         self.window.bind("<Button-4>", self.scrollup)
         self.window.bind("<Button-5>", self.scrolldown)
 
-    def load(self, url):
-        body = url.request()
-        tokens = lex(body)
-        self.content["tokens"] = tokens
-        self.content["display_list"] = Layout(
-            self.content["tokens"], 
-            self.canvas.winfo_width() - self.scroll["bar_width"],
-            self.layout_config["text_direction"],
-            self.layout_config["text_align"]
-        ).display_list
-        if len(self.content["display_list"]) > 0:
-            self.scroll["max"] = self.content["display_list"][-1][1]
-        else:
-            self.scroll["max"] = 0
-        self.draw()
-
     def draw(self):
         self.canvas.delete("all")
         for x, y, text, font in self.content["display_list"]:
@@ -92,6 +75,20 @@ class Browser:
                 outline="#f6c198",
             )
 
+    def load(self, url):
+        body = url.request()
+        self.content["nodes"] = HTMLParser(body).parse()
+        self.content["display_list"] = Layout(
+            self.content["nodes"], 
+            self.canvas.winfo_width() - self.scroll["bar_width"],
+            self.layout_config["text_direction"],
+            self.layout_config["text_align"]
+        ).display_list
+        if len(self.content["display_list"]) > 0:
+            self.scroll["max"] = self.content["display_list"][-1][1]
+        else:
+            self.scroll["max"] = 0
+        self.draw()
 
     # Event handlers
     def scrolldown(self, e):
@@ -107,7 +104,7 @@ class Browser:
     def resize(self, e):
         self.canvas.config(width=e.width, height=e.height)
         self.content["display_list"] = Layout(
-            self.content["tokens"], 
+            self.content["nodes"], 
             e.width - self.scroll["bar_width"],
             self.layout_config["text_direction"],
             self.layout_config["text_align"]
