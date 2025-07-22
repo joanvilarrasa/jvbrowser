@@ -122,7 +122,6 @@ class HTMLParser:
             # Handle formatting tags
             formatting_tag = tag[1:]
             if formatting_tag in FORMATTING_TAGS:
-                print(self.unfinished_formatting, formatting_tag)
                 if self.unfinished_formatting[-1] == formatting_tag:
                     self.unfinished_formatting.pop()
                 elif len(self.unfinished_formatting) > 1 and self.unfinished_formatting[-1] != formatting_tag:
