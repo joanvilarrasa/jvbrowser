@@ -38,7 +38,7 @@ class Layout:
 
     def open_tag(self, tag):
         if tag == "i":
-            style = "italic"
+            self.style = "italic"
         elif tag == "b":
             self.weight = "bold"
         elif tag == "abbr":

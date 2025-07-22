@@ -13,11 +13,15 @@ HEAD_TAGS = [
 DOUBLE_TAGS = [
     "p", "li"
 ]
+FORMATTING_TAGS = [
+    "b", "i" 
+]
 
 class HTMLParser:
     def __init__(self, body):
         self.body = body
         self.unfinished = []
+        self.unfinished_formatting = []
 
     def parse(self):
         buffer = ""
@@ -114,6 +118,23 @@ class HTMLParser:
         self.implicit_tags(tag)
         if tag.startswith("/"):
             if len(self.unfinished) == 1: return
+
+            # Handle formatting tags
+            formatting_tag = tag[1:]
+            if formatting_tag in FORMATTING_TAGS:
+                print(self.unfinished_formatting, formatting_tag)
+                if self.unfinished_formatting[-1] == formatting_tag:
+                    self.unfinished_formatting.pop()
+                elif len(self.unfinished_formatting) > 1 and self.unfinished_formatting[-1] != formatting_tag:
+                    tags_to_reopen = []
+                    while self.unfinished_formatting[-1] != formatting_tag:
+                        tags_to_reopen.insert(0, self.unfinished_formatting[-1])
+                        self.add_tag("/" + self.unfinished_formatting[-1])
+
+                    self.add_tag(tag)
+                    for tag_to_reopen in tags_to_reopen:
+                        self.add_tag(tag_to_reopen)
+
             node = self.unfinished.pop()
             parent = self.unfinished[-1]
             parent.children.append(node)
@@ -131,6 +152,8 @@ class HTMLParser:
             parent = self.unfinished[-1] if self.unfinished else None
             node = Element(tag, attributes, parent)
             self.unfinished.append(node)
+            if tag in FORMATTING_TAGS:
+                self.unfinished_formatting.append(tag)
 
     def implicit_tags(self, tag):
         while True:
