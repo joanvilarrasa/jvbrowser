@@ -78,6 +78,7 @@ class Browser:
     def load(self, url):
         body = url.request()
         self.content["nodes"] = HTMLParser(body).parse()
+        print_tree(self.content["nodes"])
         self.content["display_list"] = Layout(
             self.content["nodes"], 
             self.canvas.winfo_width() - self.scroll["bar_width"],

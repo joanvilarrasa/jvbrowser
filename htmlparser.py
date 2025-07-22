@@ -10,7 +10,9 @@ HEAD_TAGS = [
     "base", "basefont", "bgsound", "noscript",
     "link", "meta", "title", "style", "script",
 ]
-
+DOUBLE_TAGS = [
+    "p", "li"
+]
 
 class HTMLParser:
     def __init__(self, body):
@@ -20,7 +22,47 @@ class HTMLParser:
     def parse(self):
         buffer = ""
         in_tag = False
+        in_tag_attribute = False
+        in_comment = False
+        in_script = False
         for c in self.body:
+            if in_script:
+                if c == ">" and buffer.endswith("</script>"):
+                    in_script = False
+                    self.add_text(buffer[:-9])
+                    self.add_tag("/script")
+                    buffer = ""
+                    continue
+                else:
+                    buffer += c
+                    continue
+
+            if in_tag and buffer == "!--":
+                buffer = "!--comment_start"
+                in_comment = True
+                continue
+            if in_comment:
+                buffer += c
+                if buffer.endswith("-->"):
+                    in_comment = False
+                    in_tag = False
+                    buffer = ""
+                    continue    
+
+            if in_tag:
+                if in_tag_attribute == '"' and c == '"':
+                    in_tag_attribute = False
+                elif in_tag_attribute == "'" and c == "'":
+                    in_tag_attribute = False
+                elif buffer.endswith("='"):
+                    in_tag_attribute = "'"
+                elif buffer.endswith("=\""):
+                    in_tag_attribute = '"'
+
+            if in_tag_attribute is not False:
+                buffer += c
+                continue
+
             if c == "<":
                 in_tag = True
                 if buffer: 
@@ -29,8 +71,13 @@ class HTMLParser:
                         self.add_text(text_part)
                 buffer = ""
             elif c == ">":
+                if in_tag and buffer.startswith("script"):
+                    in_script = True
+                elif in_tag and buffer.endswith("/script"):
+                    in_script = False
                 in_tag = False
-                self.add_tag(buffer)
+                if not buffer.startswith("!--") or not buffer.endswith("-->"):
+                    self.add_tag(buffer)
                 buffer = ""
             else:
                 buffer += c
@@ -74,6 +121,12 @@ class HTMLParser:
             parent = self.unfinished[-1]
             node = Element(tag, attributes, parent)
             parent.children.append(node)
+        elif tag in DOUBLE_TAGS and self.unfinished is not None and self.unfinished[-1].tag == tag:
+            node = self.unfinished.pop()
+            parent = self.unfinished[-1]
+            parent.children.append(node)
+            node = Element(tag, attributes, parent)
+            self.unfinished.append(node)
         else:
             parent = self.unfinished[-1] if self.unfinished else None
             node = Element(tag, attributes, parent)
