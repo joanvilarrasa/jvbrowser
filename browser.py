@@ -1,11 +1,15 @@
-from emoji import EmojiProvider, is_emoji
-from htmlparser import HTMLParser, print_tree
+from css.css_parser import CSSParser, style
+from css.selectors import cascade_priority
+from htmlparser import HTMLParser
+from tag import Element
 from url import URL
-from layout import VSTEP, DocumentLayout, BlockLayout, paint_tree
+from layout import HEIGHT, VSTEP, WIDTH, DocumentLayout, paint_tree
 import tkinter
 
-WIDTH, HEIGHT = 800, 600
+from utils import tree_to_list
+
 SCROLL_STEP = 100
+DEFAULT_STYLE_SHEET = CSSParser(open("css/default.css").read()).parse()
 
 class Browser:
     def __init__(self):
@@ -15,6 +19,7 @@ class Browser:
             self.window,
             width=WIDTH,
             height=HEIGHT,
+            bg="white"
         )
         self.canvas.pack(fill=tkinter.BOTH, expand=True)
 
@@ -41,7 +46,22 @@ class Browser:
     def load(self, url):
         body = url.request()
         self.nodes = HTMLParser(body).parse()
-        # print_tree(self.nodes)
+        rules = DEFAULT_STYLE_SHEET.copy()
+        links = [node.attributes["href"] for node in tree_to_list(self.nodes, [])
+            if isinstance(node, Element)
+            and node.tag == "link"
+            and node.attributes.get("rel") == "stylesheet"
+            and "href" in node.attributes]
+
+        for link in links:
+            style_url = url.resolve(link)
+            try:
+                body = style_url.request()
+            except:
+                continue
+            rules.extend(CSSParser(body).parse())
+
+        style(self.nodes, sorted(rules, key=cascade_priority))
         self.document = DocumentLayout(self.nodes)
         self.document.layout()
         self.display_list = []

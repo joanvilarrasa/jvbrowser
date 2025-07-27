@@ -1,4 +1,3 @@
-
 class Element:
     def __init__(self, tag, attributes, parent):
         self.tag = tag

@@ -1,12 +1,9 @@
 from typing import Literal
 from draw import DrawRect, DrawText
-from emoji import is_emoji
 from font_cache import get_font
 from tag import Element
 from text import Text
 
-HSTEP, VSTEP = 13, 18
-WIDTH = 800
 BLOCK_ELEMENTS = [
     "html", "body", "article", "section", "nav", "aside",
     "h1", "h2", "h3", "h4", "h5", "h6", "hgroup", "header",
@@ -15,6 +12,11 @@ BLOCK_ELEMENTS = [
     "figcaption", "main", "div", "table", "form", "fieldset",
     "legend", "details", "summary"
 ]
+
+WIDTH = 1200
+HEIGHT = 1500
+HSTEP = 13
+VSTEP = 18
 
 class DocumentLayout:
     def __init__(self, node):
@@ -118,115 +120,61 @@ class BlockLayout:
             self.children.append(next)
             previous = next
 
-    def recurse(self, tree):
-        if isinstance(tree, Text):
-            for word in tree.text.split():
-                self.word(word)
+    def recurse(self, node):
+        if isinstance(node, Text):
+            for word in node.text.split():
+                self.word(node, word)
         else:
-            self.open_tag(tree.tag)
-            for child in tree.children:
+            if node.tag == "br":
+                self.flush()
+            for child in node.children:
                 self.recurse(child)
-            self.close_tag(tree.tag)
-
-    def open_tag(self, tag):
-        if tag == "i":
-            self.style = "italic"
-        elif tag == "b":
-            self.weight = "bold"
-        elif tag == "abbr":
-            self.size -= 4
-            self.weight = "bold"
-            self.abbr = True
-        elif tag == "pre":
-            self.pre = True
-        elif tag == "small":         
-            self.size -= 2
-        elif tag == "big":
-            self.size += 4
-        elif tag == "br":
-            self.flush()
-            self.cursor_y += VSTEP
-        elif tag == "sup":
-            self.size = int(self.size / 2)
-            self.sup = True
-        elif tag == "sub":
-            self.size = int(self.size / 2)
-            self.sub = True
-        elif tag == "h1":
-            self.flush()
-            self.size += 4
-            self.weight = "bold"
-            self.text_align = "center"
-            self.cursor_y += VSTEP
-
-    def close_tag(self, tag):
-        if tag == "i":
-            self.style = "roman"
-        elif tag == "b":
-            self.weight = "normal"
-        elif tag == "abbr":
-            self.size += 4
-            self.weight = "normal"
-            self.abbr = False
-        elif tag == "pre":
-            self.pre = False
-        elif tag == "small":
-            self.size += 2
-        elif tag == "big":
-            self.size -= 4
-        elif tag == "p":
-            self.flush()
-            self.cursor_y += VSTEP
-        elif tag == "sup":
-            self.size *= 2
-            self.sup = False
-        elif tag == "sub":
-            self.size *= 2
-            self.sub = False
-        elif tag == "h1":
-            self.flush()
-            self.size -= 4
-            self.weight = "normal"
-            self.text_align = "left"
-            self.cursor_y += VSTEP
 
     def flush(self):
         if not self.line: return
-        metrics = [font.metrics() for x, word, font in self.line]
+        metrics = [font.metrics() for x, word, font, color in self.line]
         max_ascent = max([metric["ascent"] for metric in metrics])
         max_descent = max([metric["descent"] for metric in metrics])
         baseline = self.cursor_y + 1.25 * max_ascent
-        for rel_x, word, font in self.line:
+        for rel_x, word, font, color in self.line:
             x = self.x + rel_x
             y = self.y + baseline - font.metrics("ascent")
-            self.display_list.append((x, y, word, font))
+            self.display_list.append((x, y, word, font, color))
         # Move the cursor down accounting for the max descender of the current line
         self.cursor_y = baseline + 1.25 * max_descent
         self.cursor_x = 0
         # self.cursor_y = 0
         self.line = []
     
-    def word(self, word):
-        font = get_font(self.size, self.weight, self.style)
+    def word(self, node, word):
+        # Get the text style from the node
+        weight = node.style["font-weight"]
+        style = node.style["font-style"]
+        if style == "normal": style = "roman"
+        size = int(float(node.style["font-size"][:-2]) * .75)
+        color = node.style["color"]
+        font = get_font(size, weight, style)
+
         actual_word = word.replace("\N{soft hyphen}", "")
         w = font.measure(actual_word)
         if self.cursor_x + w > self.width or word == "\n":
             self.flush()
                 
-        self.line.append((self.cursor_x, actual_word, font))
+        self.line.append((self.cursor_x, actual_word, font, color))
         self.cursor_x += w + HSTEP
 
     def paint(self):
         cmds = []
+        bgcolor = self.node.style.get("background-color","transparent")
 
-        if isinstance(self.node, Element) and self.node.tag == "pre":
+        if bgcolor != "transparent":
             x2, y2 = self.x + self.width, self.y + self.height
-            rect = DrawRect(self.x, self.y, x2, y2, "gray")
+            rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
             cmds.append(rect)
 
         if self.layout_mode() == "inline":
-            for x, y, word, font in self.display_list:
-                cmds.append(DrawText(x, y, word, font))
+            for x, y, word, font, color in self.display_list:
+                cmds.append(DrawText(x, y, word, font, color))
         return cmds
 
 
