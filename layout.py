@@ -1,30 +1,122 @@
 from typing import Literal
+from draw import DrawRect, DrawText
 from emoji import is_emoji
 from font_cache import get_font
 from tag import Element
 from text import Text
 
 HSTEP, VSTEP = 13, 18
+WIDTH = 800
+BLOCK_ELEMENTS = [
+    "html", "body", "article", "section", "nav", "aside",
+    "h1", "h2", "h3", "h4", "h5", "h6", "hgroup", "header",
+    "footer", "address", "p", "hr", "pre", "blockquote",
+    "ol", "ul", "menu", "li", "dl", "dt", "dd", "figure",
+    "figcaption", "main", "div", "table", "form", "fieldset",
+    "legend", "details", "summary"
+]
 
-class Layout:
-    def __init__(self, tree, max_width, text_direction, text_align):
+class DocumentLayout:
+    def __init__(self, node):
+        self.node = node
+        self.parent = None
+        self.children = []
+
+        # Positioning
+        self.x = None
+        self.y = None
+        self.width = None
+        self.height = None
+
+    def layout(self):
+        child = BlockLayout(self.node, self, None)
+        self.children.append(child)
+        self.width = WIDTH - 2*HSTEP
+        self.x = HSTEP
+        self.y = VSTEP
+        child.layout(1)
+        self.height = child.height
+        self.display_list = child.display_list
+
+    def paint(self):
+        return []
+
+class BlockLayout:
+    Indentation = 0
+
+    def __init__(self, node, parent, previous):
+        # Tree
+        self.node = node
+        self.parent = parent
+        self.previous = previous
+        self.children = []
+
+        # Layout state
         self.display_list = []
         self.line = []
-        self.cursor_x = HSTEP
-        self.cursor_y = VSTEP
+        self.cursor_x = 0
+        self.cursor_y = 0
         self.weight: Literal["normal", "bold"] = "normal"
         self.style: Literal["roman", "italic"] = "roman"
-        self.size = 16
-        self.max_width = max_width
-        self.text_direction: Literal["ltr", "rtl"] = text_direction
-        self.text_align: Literal["left", "right", "center"] = text_align
-        self.sup = False
-        self.sub = False
-        self.abbr = False
-        self.pre = False
+        self.size = 12
+        self.max_width = 800
 
-        self.recurse(tree)
-        self.flush()
+        # Positioning
+        self.x = None
+        self.y = None
+        self.width = None
+        self.height = None
+
+    def layout(self, level):
+        self.x = self.parent.x
+        self.width = self.parent.width
+        if self.previous:
+            self.y = self.previous.y + self.previous.height
+        else:
+            self.y = self.parent.y
+            
+        mode = self.layout_mode()
+        if mode == "block":
+            previous = None
+            for child in self.node.children:
+                next = BlockLayout(child, self, previous)
+                self.children.append(next)
+                previous = next
+        else:
+            self.cursor_x = 0
+            self.cursor_y = 0
+            self.weight = "normal"
+            self.style = "roman"
+            self.size = 12
+
+            self.line = []
+            self.recurse(self.node)
+            self.flush()
+            self.height = self.cursor_y
+
+        for child in self.children:
+            child.layout(level + 1)
+
+        if mode == "block":
+            self.height = sum([child.height for child in self.children])
+
+
+    def layout_mode(self):
+        if isinstance(self.node, Text):
+            return "inline"
+        elif any([isinstance(child, Element) and child.tag in BLOCK_ELEMENTS for child in self.node.children]):
+            return "block"
+        elif self.node.children:
+            return "inline"
+        else:
+            return "block"
+
+    def layout_intermediate(self):
+        previous = None
+        for child in self.node.children:
+            next = BlockLayout(child, self, previous)
+            self.children.append(next)
+            previous = next
 
     def recurse(self, tree):
         if isinstance(tree, Text):
@@ -100,78 +192,46 @@ class Layout:
 
     def flush(self):
         if not self.line: return
-        final_line = []
-        metrics = [font.metrics() for x, y, word, font, w, sup in self.line]
+        metrics = [font.metrics() for x, word, font in self.line]
         max_ascent = max([metric["ascent"] for metric in metrics])
         max_descent = max([metric["descent"] for metric in metrics])
         baseline = self.cursor_y + 1.25 * max_ascent
-        for i in range(len(self.line)):
-            x, y, word, font, w, sup = self.line[i]
-            if sup:
-                y = baseline - max_ascent
-            else:
-                y = baseline - font.metrics("ascent")
-            self.line[i] = (x, y, word, font, w, sup)
-
+        for rel_x, word, font in self.line:
+            x = self.x + rel_x
+            y = self.y + baseline - font.metrics("ascent")
+            self.display_list.append((x, y, word, font))
         # Move the cursor down accounting for the max descender of the current line
         self.cursor_y = baseline + 1.25 * max_descent
-
-        # Manage text alignment and direction
-        max_x = max([x + w for x, y, word, font, w, sup in self.line])
-        eol_empty_space = self.max_width - max_x
-        # If the text direction is right to left we need to reverse the order of the words in the line
-        if self.text_direction == "rtl":
-            for i in range(len(self.line)):
-                x, y, word, font, w, sup = self.line[i]
-                self.line[i] = (max_x - x - w + HSTEP, y, word, font, w, sup)
-
-        if self.text_align == "right":
-            for i in range(len(self.line)):
-                x, y, word, font, w, sup = self.line[i]
-                self.line[i] = (x + eol_empty_space, y, word, font, w, sup)
-        elif self.text_align == "center":
-            for i in range(len(self.line)):
-                x, y, word, font, w, sup = self.line[i]
-                self.line[i] = (x + eol_empty_space / 2, y, word, font, w, sup)
-        
-        for i in range(len(self.line)):
-            x, y, word, font, w, sup = self.line[i]
-            final_line.append((x, y, word, font))
-
-        self.display_list.extend(final_line)
-        self.cursor_x = HSTEP
+        self.cursor_x = 0
+        # self.cursor_y = 0
         self.line = []
     
     def word(self, word):
         font = get_font(self.size, self.weight, self.style)
-        actual_word = word
-        if self.abbr:
-            actual_word = actual_word.upper()
-        if self.text_direction == "rtl":
-            actual_word = get_reversed_word(word)
-
-        if self.pre:
-            actual_word = actual_word.replace("\n", " ")
-
+        actual_word = word.replace("\N{soft hyphen}", "")
         w = font.measure(actual_word)
-        if (self.cursor_x + w > self.max_width - HSTEP or word == "\n") and not self.pre:
-            i = len(actual_word) - 1
-            found_good_soft_hyphen = False
-            while i > 0 and found_good_soft_hyphen is False:
-                if actual_word[i] == "\N{soft hyphen}":
-                    partial_w = font.measure(actual_word[:i+1].replace("\N{soft hyphen}", ""))
-                    if self.cursor_x + partial_w < self.max_width - HSTEP:
-                        found_good_soft_hyphen = True
-                        self.line.append((self.cursor_x, self.cursor_y, actual_word[:i+1].replace("\N{soft hyphen}", "")+"\N{soft hyphen}", font, partial_w, self.sup))
-                        self.flush()
-                        actual_word = actual_word[i+1:]
-                i -= 1
-            if found_good_soft_hyphen is False:
-                self.flush()
+        if self.cursor_x + w > self.width or word == "\n":
+            self.flush()
                 
-        actual_word = actual_word.replace("\N{soft hyphen}", "")
-        self.line.append((self.cursor_x, self.cursor_y, actual_word, font, w, self.sup))
+        self.line.append((self.cursor_x, actual_word, font))
         self.cursor_x += w + HSTEP
 
-def get_reversed_word(word):
-    return "".join(reversed(word))
+    def paint(self):
+        cmds = []
+
+        if isinstance(self.node, Element) and self.node.tag == "pre":
+            x2, y2 = self.x + self.width, self.y + self.height
+            rect = DrawRect(self.x, self.y, x2, y2, "gray")
+            cmds.append(rect)
+
+        if self.layout_mode() == "inline":
+            for x, y, word, font in self.display_list:
+                cmds.append(DrawText(x, y, word, font))
+        return cmds
+
+
+def paint_tree(layout_object, display_list):
+    display_list.extend(layout_object.paint())
+
+    for child in layout_object.children:
+        paint_tree(child, display_list)
