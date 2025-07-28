@@ -1,6 +1,9 @@
 from typing import Literal
+from chrome import Rect
 from draw import DrawRect, DrawText
 from font_cache import get_font
+from layout.line_layout import LineLayout
+from layout.text_layout import TextLayout
 from tag import Element
 from text import Text
 
@@ -36,9 +39,8 @@ class DocumentLayout:
         self.width = WIDTH - 2*HSTEP
         self.x = HSTEP
         self.y = VSTEP
-        child.layout(1)
+        child.layout()
         self.height = child.height
-        self.display_list = child.display_list
 
     def paint(self):
         return []
@@ -54,7 +56,6 @@ class BlockLayout:
         self.children = []
 
         # Layout state
-        self.display_list = []
         self.line = []
         self.cursor_x = 0
         self.cursor_y = 0
@@ -69,7 +70,7 @@ class BlockLayout:
         self.width = None
         self.height = None
 
-    def layout(self, level):
+    def layout(self):
         self.x = self.parent.x
         self.width = self.parent.width
         if self.previous:
@@ -85,22 +86,13 @@ class BlockLayout:
                 self.children.append(next)
                 previous = next
         else:
-            self.cursor_x = 0
-            self.cursor_y = 0
-            self.weight = "normal"
-            self.style = "roman"
-            self.size = 12
-
-            self.line = []
+            self.new_line()
             self.recurse(self.node)
-            self.flush()
-            self.height = self.cursor_y
 
         for child in self.children:
-            child.layout(level + 1)
+            child.layout()
 
-        if mode == "block":
-            self.height = sum([child.height for child in self.children])
+        self.height = sum([child.height for child in self.children])
 
 
     def layout_mode(self):
@@ -155,27 +147,34 @@ class BlockLayout:
         color = node.style["color"]
         font = get_font(size, weight, style)
 
-        actual_word = word.replace("\N{soft hyphen}", "")
-        w = font.measure(actual_word)
-        if self.cursor_x + w > self.width or word == "\n":
-            self.flush()
+        w = font.measure(word)
+        line = self.children[-1]
+        previous_word = line.children[-1] if line.children else None
+        text = TextLayout(node, word, line, previous_word)
+        line.children.append(text)
+        if self.cursor_x + w > self.width:
+            self.new_line()
                 
-        self.line.append((self.cursor_x, actual_word, font, color))
-        self.cursor_x += w + HSTEP
+        # self.line.append((self.cursor_x, actual_word, font, color))
+        # self.cursor_x += w + HSTEP
+        
+    def new_line(self):
+        self.cursor_x = 0
+        last_line = self.children[-1] if self.children else None
+        new_line = LineLayout(self.node, self, last_line)
+        self.children.append(new_line)
+
 
     def paint(self):
         cmds = []
         bgcolor = self.node.style.get("background-color","transparent")
-
         if bgcolor != "transparent":
-            x2, y2 = self.x + self.width, self.y + self.height
-            rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
+            rect = DrawRect(self.self_rect(), bgcolor)
             cmds.append(rect)
-
-        if self.layout_mode() == "inline":
-            for x, y, word, font, color in self.display_list:
-                cmds.append(DrawText(x, y, word, font, color))
         return cmds
+
+    def self_rect(self):
+        return Rect(self.x, self.y, self.x + self.width, self.y + self.height)
 
 
 def paint_tree(layout_object, display_list):

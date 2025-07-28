@@ -21,6 +21,14 @@ class URL:
         self.is_valid_url = True
         self.init_url(url)
 
+    def __str__(self):
+        port_part = ":" + str(self.port)
+        if self.scheme == "https" and self.port == 443:
+            port_part = ""
+        if self.scheme == "http" and self.port == 80:
+            port_part = ""
+        return self.scheme + "://" + self.host + port_part + self.path
+
     def init_url(self, url):
         try:
             # If the URL starts with view-source: set the flag and remove the scheme
