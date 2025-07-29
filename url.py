@@ -73,7 +73,7 @@ class URL:
             self.url = "about:blank"
             self.is_valid_url = False
     
-    def request(self):
+    def request(self, payload=None):
         if not self.is_valid_url:
             return ""
         
@@ -86,11 +86,13 @@ class URL:
         if self.scheme == "file":
             with open(self.host + self.path, encoding="utf8", newline="\r\n") as f:
                 response = f.read()
-                return response
+                return response 
 
+        self.method = "POST" if payload else "GET"
 
         # Send the request to the server
-        request = self.build_request()
+        length = len(payload.encode("utf8")) if payload else None
+        request = self.build_request(length)
 
         cached_response = None
         if self.method == "GET":
@@ -102,6 +104,7 @@ class URL:
 
         # Moved the socket after the cache check to avoid opening a connection if the request is cached
         s = self.get_open_socket()
+        if payload: request += payload
         s.send(request.encode("utf8"))
         
         # Read the response from the server
@@ -142,17 +145,20 @@ class URL:
             active_sockets[connection_key] = s
         return s
     
-    def build_request(self):
+    def build_request(self, payload_length=None):
         request = "{} {} HTTP/1.1\r\n".format(self.method, self.path)
         request += "Host: {}\r\n".format(self.host)
         request += "Connection: keep-alive\r\n"
         request += "User-Agent: jvbrowser/1.0\r\n"
         request += "Accept-Encoding: gzip\r\n"
+        if payload_length:
+            request += "Content-Length: {}\r\n".format(payload_length)
         request += "\r\n"
 
         return request
 
     def get_response_metadata(self, response):
+        print("get_response_metadata", response)
         statusline = response.readline().decode("utf8")
         version, status, explanation = statusline.split(" ", 2)
         response_headers = {}
