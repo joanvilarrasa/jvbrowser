@@ -1,10 +1,7 @@
 import socket
 import ssl
-import time 
 import gzip
 
-active_sockets = {}
-responses_cache = {}
 MAX_REDIRECTS = 10
 
 class URL:    
@@ -31,31 +28,17 @@ class URL:
 
     def init_url(self, url):
         try:
-            # If the URL starts with view-source: set the flag and remove the scheme
-            if url.startswith("data:"):
-                self.scheme = "data"
-                self.mediatype, self.data = url.split(",", 1)
-                return
-
-            print("url", url)
-            if url.startswith("view-source:"):
-                # If the URL starts with view-source: set the flag and remove the scheme
-                self.view_source = True
-                url = url[12:]
-            else:
-                self.view_source = False
+            self.view_source = False
 
             # Split the URL into scheme, host, and path
             self.scheme, url = url.split("://", 1)
-            assert self.scheme in ["http", "https", "file", "data"]
+            assert self.scheme in ["http", "https", "file"]
             # Set the default port for the scheme
             if self.scheme == "http":
                 self.port = 80
             elif self.scheme == "https":
                 self.port = 443
             elif self.scheme == "file":
-                self.port = None
-            elif self.scheme == "data":
                 self.port = None
 
             # Parse the hoset and the path
@@ -77,8 +60,6 @@ class URL:
         if not self.is_valid_url:
             return ""
         
-        if self.scheme == "data":
-            return self.data
         if self.host is None:
             raise ValueError("Invalid host: {}".format(self.host))
 
@@ -93,14 +74,6 @@ class URL:
         # Send the request to the server
         length = len(payload.encode("utf8")) if payload else None
         request = self.build_request(length)
-
-        cached_response = None
-        if self.method == "GET":
-            cached_response = responses_cache.get(self.host + self.path)
-            if cached_response is not None:
-                if cached_response["expires"] > time.time():
-                    # Cache hit
-                    return cached_response["content"]
 
         # Moved the socket after the cache check to avoid opening a connection if the request is cached
         s = self.get_open_socket()
@@ -119,36 +92,26 @@ class URL:
         # Get the content of the response
         content = self.get_response_content(response, response_headers)
 
-        # If possible, cache the response
-        if int(status) == 200 and self.method == "GET":
-            self.cache_response(content, response_headers)
-
-        # Return the content of the response
+        s.close()
         return content
 
     def get_open_socket(self): 
-        connection_key = (self.host, self.port, self.scheme)
-        # See if the connection exists
-        s = active_sockets.get(connection_key)
-        if s is None:
-            s = socket.socket(
-                family=socket.AF_INET,
-                type=socket.SOCK_STREAM,
-                proto=socket.IPPROTO_TCP,
-            )
-            s.connect((self.host, self.port))
-            # Wrap the socket in an SSL context if the scheme is https
-            if self.scheme == "https":
-                ctx = ssl.create_default_context()
-                s = ctx.wrap_socket(s, server_hostname=self.host)
-            # Store the connection
-            active_sockets[connection_key] = s
+        s = socket.socket(
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+        s.connect((self.host, self.port))
+    
+        if self.scheme == "https":
+            ctx = ssl.create_default_context()
+            s = ctx.wrap_socket(s, server_hostname=self.host)
         return s
     
     def build_request(self, payload_length=None):
         request = "{} {} HTTP/1.1\r\n".format(self.method, self.path)
         request += "Host: {}\r\n".format(self.host)
-        request += "Connection: keep-alive\r\n"
+        
         request += "User-Agent: jvbrowser/1.0\r\n"
         request += "Accept-Encoding: gzip\r\n"
         if payload_length:
@@ -158,7 +121,6 @@ class URL:
         return request
 
     def get_response_metadata(self, response):
-        print("get_response_metadata", response)
         statusline = response.readline().decode("utf8")
         version, status, explanation = statusline.split(" ", 2)
         response_headers = {}
@@ -181,7 +143,6 @@ class URL:
             content_length = int(response_headers["content-length"])
             raw_content = response.read(content_length)
         else:
-            # If we did not find content length, read all the content
             print("No content length")
             raw_content = response.read()
         
@@ -195,7 +156,6 @@ class URL:
         return content
 
     def read_chunked_content(self, response):
-        """Read content using chunked transfer encoding."""
         chunks = []
         while True:
             # Read the chunk size line
@@ -238,20 +198,6 @@ class URL:
             self.init_url(redirect_url)
             return self.request()
     
-    def cache_response(self, content, response_headers):
-        if self.host is not None and responses_cache.get(self.host + self.path) is None:
-            if "cache-control" in response_headers:
-                cache_control = response_headers["cache-control"]
-                # If the cache control contains max-age or no-cache, 
-                if "max-age" in cache_control:
-                    print("Caching response for {} seconds".format(cache_control.split("=")[1]))
-                    responses_cache[self.host + self.path] = {
-                        "content": content,
-                        "response_headers": response_headers,
-                        "created": time.time(),
-                        "expires": time.time() + int(cache_control.split("=")[1])
-                    }
-
     def resolve(self, url):
         if "://" in url: return URL(url)
         if not url.startswith("/"):

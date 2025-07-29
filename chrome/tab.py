@@ -1,4 +1,4 @@
-import urllib
+import urllib.parse
 from css.css_parser import CSSParser, style
 from css.selectors import cascade_priority
 from htmlparser import HTMLParser
@@ -76,6 +76,7 @@ class Tab:
             body += "&" + name + "=" + value
         body = body[1:]
         url = self.url.resolve(elt.attributes["action"])
+        print("SUBMITTING FORM \n", url, body)
         self.load(url, body)
 
     # Event handlers

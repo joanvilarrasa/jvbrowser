@@ -1,5 +1,5 @@
 import socket
-import urllib
+import urllib.parse
 
 ENTRIES = [ 'Pavel was here' ]
 
@@ -33,16 +33,12 @@ def do_request(method, url, headers, body):
 
 def show_comments():
     out = "<!doctype html>"
-    out += "<html><head><title>Guest Book</title></head><body>"
-    out += "<h1>Guest Book</h1>"
-    for entry in ENTRIES:
-        out += "<p>" + entry + "</p>"
-
-    out += "<form action=/add method=post>"
-    out +=   "<p><input name=guest placeholder='Enter your name'></p>"
+    out += "<form action=add method=post>"
+    out +=   "<p><input name=guest></p>"
     out +=   "<p><button>Sign the book!</button></p>"
     out += "</form>"
-    out += "</body></html>"
+    for entry in ENTRIES:
+        out += "<p>" + entry + "</p>"
     return out
 
 
@@ -63,7 +59,7 @@ def handle_connection(conx):
         length = int(headers['content-length'])
         body = req.read(length).decode('utf8')
     else:
-        body = ""
+        body = None
 
     status, body = do_request(method, url, headers, body)
 
@@ -71,21 +67,11 @@ def handle_connection(conx):
     response += "Content-Type: text/html; charset=utf-8\r\n"
     response += "Content-Length: {}\r\n".format(
         len(body.encode("utf8")))
-    
-    # Handle persistent connections
-    connection_header = headers.get('connection', '').lower()
-    if connection_header == 'keep-alive':
-        response += "Connection: keep-alive\r\n"
-        should_close = False
-    else:
-        response += "Connection: close\r\n"
-        should_close = True
-    
+    print("RESPONSE \n", response)
     response += "\r\n" + body
     conx.send(response.encode('utf8'))
     
-    if should_close:
-        conx.close()
+    conx.close()
 
 
 s = socket.socket(

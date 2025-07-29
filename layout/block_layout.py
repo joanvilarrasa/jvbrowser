@@ -128,15 +128,12 @@ class BlockLayout:
         cmds = []
         bgcolor = self.node.style.get("background-color","transparent")
         if bgcolor != "transparent":
-            rect = DrawRect(self.self_rect(), bgcolor)
+            rect = DrawRect(Rect(self.x, self.y, self.x + self.width, self.y + self.height), bgcolor)
             cmds.append(rect)
         return cmds
     
     def should_paint(self):
         return isinstance(self.node, Text) or (self.node.tag != "input" and self.node.tag != "button")
-
-    def self_rect(self):
-        return Rect(self.x, self.y, self.x + self.width, self.y + self.height)
 
     # Handle text
     def word(self, node, word):
