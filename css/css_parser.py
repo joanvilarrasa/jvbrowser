@@ -1,5 +1,5 @@
 from css.selectors import DescendantSelector, TagSelector
-from tag import Element
+from htmltree.tag import Element
 
 INHERITED_PROPERTIES = {
     "font-size": "16px",

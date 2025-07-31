@@ -5,8 +5,8 @@ from font_cache import get_font
 from layout.input_layout import INPUT_WIDTH_PX, InputLayout
 from layout.line_layout import LineLayout
 from layout.text_layout import TextLayout
-from tag import Element
-from text import Text
+from htmltree.tag import Element
+from htmltree.text import Text
 
 BLOCK_ELEMENTS = [
     "html", "body", "article", "section", "nav", "aside",
@@ -55,6 +55,10 @@ class BlockLayout:
             self.y = self.previous.y + self.previous.height
         else:
             self.y = self.parent.y
+
+        if isinstance(self.node, Element) and self.node.tag == "head":
+            self.height = 0
+            return
             
         mode = self.layout_mode()
         if mode == "block":

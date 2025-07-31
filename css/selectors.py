@@ -1,4 +1,4 @@
-from tag import Element
+from htmltree.tag import Element
 
 class TagSelector:
     def __init__(self, tag):

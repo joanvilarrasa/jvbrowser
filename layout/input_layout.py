@@ -1,6 +1,6 @@
 from draw import DrawLine, DrawRect, DrawText, Rect
 from font_cache import get_font
-from text import Text
+from htmltree.text import Text
 
 INPUT_WIDTH_PX = 200
 

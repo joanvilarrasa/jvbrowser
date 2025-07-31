@@ -1,11 +1,12 @@
 import urllib.parse
 from css.css_parser import CSSParser, style
 from css.selectors import cascade_priority
-from htmlparser import HTMLParser
+from htmltree.htmlparser import HTMLParser
+from htmltree.tag import Element
+from htmltree.text import Text
+from js.js_context import JSContext
 from layout.block_layout import VSTEP, paint_tree
 from layout.document_layout import DocumentLayout
-from tag import Element
-from text import Text
 from utils import tree_to_list
 
 SCROLL_STEP = 100
@@ -30,12 +31,28 @@ class Tab:
         body = url.request(payload)
         self.nodes = HTMLParser(body).parse()
         self.rules = DEFAULT_STYLE_SHEET.copy()
+
+        # Get all the scripts and execute them in order
+        scripts = [node.attributes["src"] for node
+                   in tree_to_list(self.nodes, [])
+                   if isinstance(node, Element)
+                   and node.tag == "script"
+                   and "src" in node.attributes]
+        self.js = JSContext(self)
+        for script in scripts:
+            script_url = url.resolve(script)
+            try:
+                body = script_url.request()
+                self.js.run(script, body)
+            except:
+                continue
+
+        # Get all the stylesheets and add them to the rules in order
         links = [node.attributes["href"] for node in tree_to_list(self.nodes, [])
             if isinstance(node, Element)
             and node.tag == "link"
             and node.attributes.get("rel") == "stylesheet"
             and "href" in node.attributes]
-
         for link in links:
             style_url = url.resolve(link)
             try:
@@ -60,6 +77,8 @@ class Tab:
             cmd.execute(self.scroll - offset, canvas)
 
     def submit_form(self, elt):
+        # Dispatch the submit event to the js runtime
+        if self.js.dispatch_event("submit", elt): return
         # Find all the input elements of the form
         inputs = [node for node in tree_to_list(elt, [])
                   if isinstance(node, Element)
@@ -76,7 +95,6 @@ class Tab:
             body += "&" + name + "=" + value
         body = body[1:]
         url = self.url.resolve(elt.attributes["action"])
-        print("SUBMITTING FORM \n", url, body)
         self.load(url, body)
 
     # Event handlers
@@ -108,14 +126,17 @@ class Tab:
             if isinstance(elt, Text):
                 pass
             elif elt.tag == "a" and "href" in elt.attributes:
+                if self.js.dispatch_event("click", elt): return
                 url = self.url.resolve(elt.attributes["href"])
                 return self.load(url)
             elif elt.tag == "input":
+                if self.js.dispatch_event("click", elt): return
                 elt.attributes["value"] = ""
                 self.focus = elt
                 elt.is_focused = True
                 return self.render()
             elif elt.tag == "button":
+                if self.js.dispatch_event("click", elt): return
                 while elt:
                     if elt.tag == "form" and "action" in elt.attributes:
                         return self.submit_form(elt)
@@ -124,5 +145,6 @@ class Tab:
 
     def keypress(self, char):
         if self.focus:
+            if self.js.dispatch_event("keydown", self.focus): return
             self.focus.attributes["value"] += char
             self.render()
