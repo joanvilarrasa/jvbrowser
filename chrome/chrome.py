@@ -2,10 +2,10 @@
 from font_cache import get_font
 from draw import DrawLine, DrawOutline, DrawRect, DrawText, Rect
 from layout.block_layout import WIDTH
-from url import URL
 
 class Chrome:
-    def __init__(self, browser):
+    def __init__(self, browser, url_class):
+        self.url_class = url_class
         self.browser = browser
         # Setup font
         self.font = get_font(20, "normal", "roman")
@@ -126,7 +126,7 @@ class Chrome:
     def click(self, x, y):
         self.focus = None
         if self.newtab_rect.contains_point(x, y):
-            self.browser.new_tab(URL("https://browser.engineering/"))
+            self.browser.new_tab(self.url_class("https://browser.engineering/"), self.url_class)
         elif self.back_rect.contains_point(x, y):
             self.browser.active_tab.go_back()
         elif self.address_rect.contains_point(x, y):
@@ -146,7 +146,7 @@ class Chrome:
 
     def enter(self):
         if self.focus == "address bar":
-            self.browser.active_tab.load(URL(self.address_bar))
+            self.browser.active_tab.load(self.url_class(self.address_bar))
             self.focus = None
 
     def blur(self):

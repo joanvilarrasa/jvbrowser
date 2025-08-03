@@ -13,8 +13,9 @@ SCROLL_STEP = 100
 DEFAULT_STYLE_SHEET = CSSParser(open("css/default.css").read()).parse()
 
 class Tab:
-    def __init__(self, tab_height):
+    def __init__(self, tab_height, url_class):
         # Setup content
+        self.url_class = url_class
         self.tab_height = tab_height
         self.url = None
         self.document = DocumentLayout(None)
@@ -26,11 +27,19 @@ class Tab:
         self.focus = None
 
     def load(self, url, payload=None):
+        headers, body = url.request(self.url, payload)
         self.url = url
         self.history.append(url)
-        body = url.request(payload)
         self.nodes = HTMLParser(body).parse()
         self.rules = DEFAULT_STYLE_SHEET.copy()
+
+        self.allowed_origins = None
+        if "content-security-policy" in headers:
+            csp = headers["content-security-policy"].split()
+            if len(csp) > 0 and csp[0] == "default-src":
+                self.allowed_origins = []
+                for origin in csp[1:]:
+                    self.allowed_origins.append(self.url_class(origin).origin())
 
         # Get all the scripts and execute them in order
         scripts = [node.attributes["src"] for node
@@ -41,8 +50,11 @@ class Tab:
         self.js = JSContext(self)
         for script in scripts:
             script_url = url.resolve(script)
+            if not self.allowed_request(script_url):
+                print("Blocked script", script, "due to CSP")
+                continue
             try:
-                body = script_url.request()
+                headers, body = script_url.request(url)
                 self.js.run(script, body)
             except:
                 continue
@@ -55,12 +67,18 @@ class Tab:
             and "href" in node.attributes]
         for link in links:
             style_url = url.resolve(link)
+            if not self.allowed_request(style_url):
+                print("Blocked stylesheet", link, "due to CSP")
+                continue
             try:
-                body = style_url.request()
+                headers, body = style_url.request(url)
             except:
                 continue
             self.rules.extend(CSSParser(body).parse())
         self.render()
+
+    def allowed_request(self, url):
+        return self.allowed_origins == None or url.origin() in self.allowed_origins
     
     def render(self):
         style(self.nodes, sorted(self.rules, key=cascade_priority))

@@ -1,4 +1,5 @@
 LISTENERS = {}
+function XMLHttpRequest() {}
 
 console = { log: function(x) { call_python("log", x); } }
 document = { querySelectorAll: function(s) {
@@ -40,3 +41,13 @@ Object.defineProperty(Node.prototype, 'innerHTML', {
         call_python("innerHTML_set", this.handle, s.toString());
     }
 });
+
+// XMLHttpRequest
+XMLHttpRequest.prototype.open = function(method, url, is_async) {
+    if (is_async) throw Error("Asynchronous XHR is not supported");
+    this.method = method;
+    this.url = url;
+}
+XMLHttpRequest.prototype.send = function(body) {
+    this.responseText = call_python("XMLHttpRequest_send", this.method, this.url, body);
+}
