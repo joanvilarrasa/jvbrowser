@@ -5,8 +5,9 @@ from htmltree.htmlparser import HTMLParser
 from htmltree.tag import Element
 from htmltree.text import Text
 from js.js_context import JSContext
-from layout.block_layout import VSTEP, paint_tree
+from layout.block_layout import VSTEP
 from layout.document_layout import DocumentLayout
+from draw import paint_tree
 from utils import tree_to_list
 
 SCROLL_STEP = 100
@@ -87,12 +88,9 @@ class Tab:
         self.display_list = []
         paint_tree(self.document, self.display_list)
 
-    def draw(self, canvas, offset):
+    def raster(self, canvas):
         for cmd in self.display_list:
-            if cmd.rect.top > self.scroll + self.tab_height:
-                continue
-            if cmd.rect.bottom < self.scroll: continue
-            cmd.execute(self.scroll - offset, canvas)
+            cmd.execute(canvas)
 
     def submit_form(self, elt):
         # Dispatch the submit event to the js runtime

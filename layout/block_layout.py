@@ -1,6 +1,6 @@
 from typing import Literal
-from chrome.chrome import Rect
-from draw import DrawRect, DrawText
+import skia
+from draw import DrawRRect, paint_visual_effects
 from font_cache import get_font
 from layout.input_layout import INPUT_WIDTH_PX, InputLayout
 from layout.line_layout import LineLayout
@@ -18,7 +18,7 @@ BLOCK_ELEMENTS = [
 ]
 
 WIDTH = 1200
-HEIGHT = 1500
+HEIGHT = 1000
 HSTEP = 13
 VSTEP = 18
 
@@ -108,13 +108,13 @@ class BlockLayout:
 
     def flush(self):
         if not self.line: return
-        metrics = [font.metrics() for x, word, font, color in self.line]
-        max_ascent = max([metric["ascent"] for metric in metrics])
-        max_descent = max([metric["descent"] for metric in metrics])
+        metrics = [font.getMetrics() for x, word, font, color in self.line]
+        max_ascent = max([abs(metric.fAscent) for metric in metrics])
+        max_descent = max([metric.fDescent for metric in metrics])
         baseline = self.cursor_y + 1.25 * max_ascent
         for rel_x, word, font, color in self.line:
             x = self.x + rel_x
-            y = self.y + baseline - font.metrics("ascent")
+            y = self.y + baseline - font.getMetrics().fAscent
             self.display_list.append((x, y, word, font, color))
         # Move the cursor down accounting for the max descender of the current line
         self.cursor_y = baseline + 1.25 * max_descent
@@ -132,12 +132,21 @@ class BlockLayout:
         cmds = []
         bgcolor = self.node.style.get("background-color","transparent")
         if bgcolor != "transparent":
-            rect = DrawRect(Rect(self.x, self.y, self.x + self.width, self.y + self.height), bgcolor)
-            cmds.append(rect)
+            radius = float(
+                self.node.style.get(
+                    "border-radius", "0px")[:-2])
+            cmds.append(DrawRRect(
+                self.self_rect(), radius, bgcolor))
         return cmds
     
     def should_paint(self):
         return isinstance(self.node, Text) or (self.node.tag != "input" and self.node.tag != "button")
+
+    def self_rect(self):
+        return skia.Rect.MakeLTRB(
+            self.x, self.y,
+            self.x + self.width,
+            self.y + self.height)
 
     # Handle text
     def word(self, node, word):
@@ -149,7 +158,7 @@ class BlockLayout:
         color = node.style["color"]
         font = get_font(size, weight, style)
 
-        w = font.measure(word)
+        w = font.measureText(word)
         line = self.children[-1]
         previous_word = line.children[-1] if line.children else None
         text = TextLayout(node, word, line, previous_word)
@@ -176,15 +185,17 @@ class BlockLayout:
         size = int(float(node.style["font-size"][:-2]) * .75)
         font = get_font(size, weight, style)
 
-        self.cursor_x += w + font.measure(" ")
+        self.cursor_x += w + font.measureText(" ")
+
+    def paint_effects(self, cmds):
+        cmds = paint_visual_effects(
+            self.node, cmds, self.self_rect())
+        return cmds
+
+    def self_rect(self):
+        return skia.Rect.MakeLTRB(
+            self.x, self.y,
+            self.x + self.width,
+            self.y + self.height)
 
 
-def paint_tree(layout_object, display_list):
-    if isinstance(layout_object, BlockLayout):
-        if layout_object.should_paint():
-            display_list.extend(layout_object.paint())
-    else:
-        display_list.extend(layout_object.paint())
-
-    for child in layout_object.children:
-        paint_tree(child, display_list)

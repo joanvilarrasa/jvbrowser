@@ -1,6 +1,8 @@
-from draw import DrawLine, DrawRect, DrawText, Rect
+import skia
+from draw import DrawLine, DrawRect, DrawText, linespace
 from font_cache import get_font
 from htmltree.text import Text
+from draw import paint_visual_effects
 
 INPUT_WIDTH_PX = 200
 
@@ -19,17 +21,17 @@ class InputLayout:
         self.font = get_font(size, weight, style)
         self.width = INPUT_WIDTH_PX
         if self.previous:
-            space = self.previous.font.measure(" ")
+            space = self.previous.font.measureText(" ")
             self.x = self.previous.x + space + self.previous.width
         else:
             self.x = self.parent.x
-        self.height = self.font.metrics("linespace") 
+        self.height = linespace(self.font) 
 
     def paint(self):
         cmds = []
         bgcolor = self.node.style.get("background-color","transparent")
         if bgcolor != "transparent":
-            rect = DrawRect(Rect(self.x, self.y, self.x + self.width, self.y + self.height), bgcolor)
+            rect = DrawRect(skia.Rect.MakeLTRB(self.x, self.y, self.x + self.width, self.y + self.height), bgcolor)
             cmds.append(rect)
 
         if self.node.tag == "input":
@@ -44,8 +46,22 @@ class InputLayout:
         cmds.append(DrawText(self.x, self.y, text, self.font, color))
 
         if self.node.is_focused:
-            cx = self.x + self.font.measure(text)
+            cx = self.x + self.font.measureText(text)
             cmds.append(DrawLine(
                 cx, self.y, cx, self.y + self.height, "black", 1))
 
+        return cmds
+
+    def should_paint(self):
+        return True
+
+    def self_rect(self):
+        return skia.Rect.MakeLTRB(
+            self.x, self.y,
+            self.x + self.width,
+            self.y + self.height)
+
+    def paint_effects(self, cmds):
+        cmds = paint_visual_effects(
+            self.node, cmds, self.self_rect())
         return cmds

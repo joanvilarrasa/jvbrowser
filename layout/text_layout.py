@@ -1,6 +1,7 @@
-from draw import DrawText
+from draw import DrawText, linespace
 from font_cache import get_font
-
+from draw import paint_visual_effects
+import skia
 
 class TextLayout:
     def __init__(self, node, word, parent, previous):
@@ -16,14 +17,28 @@ class TextLayout:
         if style == "normal": style = "roman"
         size = int(float(self.node.style["font-size"][:-2]) * .75)
         self.font = get_font(size, weight, style)
-        self.width = self.font.measure(self.word)
+        self.width = self.font.measureText(self.word)
         if self.previous:
-            space = self.previous.font.measure(" ")
+            space = self.previous.font.measureText(" ")
             self.x = self.previous.x + space + self.previous.width
         else:
             self.x = self.parent.x
-        self.height = self.font.metrics("linespace") 
+        self.height = linespace(self.font) 
 
     def paint(self):
         color = self.node.style["color"]
         return [DrawText(self.x, self.y, self.word, self.font, color)]
+
+    def should_paint(self):
+        return True
+
+    def self_rect(self):
+        return skia.Rect.MakeLTRB(
+            self.x, self.y,
+            self.x + self.width,
+            self.y + self.height)
+
+    def paint_effects(self, cmds):
+        cmds = paint_visual_effects(
+            self.node, cmds, self.self_rect())
+        return cmds
