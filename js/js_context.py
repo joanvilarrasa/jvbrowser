@@ -27,7 +27,11 @@ class JSContext:
 
     def run(self, script, code):
         try:
-            return self.interp.evaljs(code)
+            # Measure JS eval
+            self.tab.browser.measure.time('evaljs run')
+            result = self.interp.evaljs(code)
+            self.tab.browser.measure.stop('evaljs run')
+            return result
         except dukpy.JSRuntimeError as e:
             print("Script", script, "crashed", e)
 
@@ -54,7 +58,9 @@ class JSContext:
 
     def dispatch_event(self, type, elt):
         handle = self.node_to_handle.get(elt, -1)
+        self.tab.browser.measure.time('evaljs dispatch_event ' + type)
         do_default = self.interp.evaljs(EVENT_DISPATCH_JS, type=type, handle=handle)
+        self.tab.browser.measure.stop('evaljs dispatch_event ' + type)
         return not do_default
 
     def innerHTML_set(self, handle, s):
@@ -86,7 +92,9 @@ class JSContext:
 
     def dispatch_xhr_onload(self, out, handle):
         if self.discarded: return
+        self.tab.browser.measure.time('evaljs xhr_onload')
         do_default = self.interp.evaljs(XHR_ONLOAD_JS, out=out, handle=handle)
+        self.tab.browser.measure.stop('evaljs xhr_onload')
 
     def dispatch_settimeout(self, handle):
         if self.discarded: return

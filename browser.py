@@ -7,6 +7,7 @@ import socket
 import ssl
 import threading
 import urllib.parse
+import time
 from css.css_parser import CSSParser, style
 from css.selectors import cascade_priority
 from draw import DrawLine, DrawOutline, DrawRect, DrawText, contains_point, linespace, paint_tree
@@ -26,6 +27,42 @@ REFRESH_RATE_SEC = .033
 COOKIE_JAR = {}
 MAX_REDIRECTS = 10
 
+class MeasureTime:
+    def __init__(self):
+        self.file = open("browser.trace", "w")
+        # Start traceEvents array
+        self.file.write('{"traceEvents": [')
+        ts = time.time() * 1000000
+        self.file.write(
+            '{ "name": "process_name",' +
+            '"ph": "M",' +
+            '"ts": ' + str(ts) + ',' +
+            '"pid": 1, "cat": "__metadata",' +
+            '"args": {"name": "Browser"}}')
+        self.file.flush()
+
+    def time(self, name):
+        ts = time.time() * 1000000
+        self.file.write(
+            ', { "ph": "B", "cat": "_",' +
+            '"name": "' + name + '",' +
+            '"ts": ' + str(ts) + ',' +
+            '"pid": 1, "tid": 1}')
+        self.file.flush()
+
+    def stop(self, name):
+        ts = time.time() * 1000000
+        self.file.write(
+            ', { "ph": "E", "cat": "_",' +
+            '"name": "' + name + '",' +
+            '"ts": ' + str(ts) + ',' +
+            '"pid": 1, "tid": 1}')
+        self.file.flush()
+
+    def finish(self):
+        self.file.write(']}')
+        self.file.close()
+
 class Browser:
     def __init__(self):
         self.tabs = []
@@ -34,6 +71,7 @@ class Browser:
         self.animation_timer = None
         self.needs_raster_and_draw = False
         self.needs_animation_frame = True
+        self.measure = MeasureTime()
 
         if sdl2.SDL_BYTEORDER == sdl2.SDL_BIG_ENDIAN:
             self.RED_MASK = 0xff000000
@@ -112,10 +150,12 @@ class Browser:
     # Drawing
     def raster_and_draw(self):
         if not self.needs_raster_and_draw: return
+        self.measure.time('raster_and_draw')
         self.raster_chrome()
         self.raster_tab()
         self.draw()
         self.needs_raster_and_draw = False
+        self.measure.stop('raster_and_draw')
 
     def schedule_animation_frame(self):
         def callback():
@@ -181,6 +221,8 @@ class Browser:
 
     def handle_quit(self):
         sdl2.SDL_DestroyWindow(self.sdl_window)
+        # Finish tracing
+        self.measure.finish()
 
 class URL:    
     def __init__(self, url):
@@ -641,8 +683,12 @@ class Tab:
     
     def render(self):
         if not self.needs_render: return
+        self.browser.measure.time('render')
         if self.js and not self.js.discarded:
+            # Measure RAF handler execution separately
+            self.browser.measure.time('evaljs __runRAFHandlers')
             self.js.interp.evaljs("__runRAFHandlers()")
+            self.browser.measure.stop('evaljs __runRAFHandlers')
         style(self.nodes, sorted(self.rules, key=cascade_priority))
         self.document = DocumentLayout(self.nodes)
         self.document.layout()
@@ -650,6 +696,7 @@ class Tab:
         paint_tree(self.document, self.display_list)
         self.needs_render = False
         self.browser.set_needs_raster_and_draw()
+        self.browser.measure.stop('render')
 
     def raster(self, canvas):
         for cmd in self.display_list:
