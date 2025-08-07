@@ -51,6 +51,13 @@ def do_request(session, method, url, headers, body):
         with open("web_server/comment.css") as f:
             return "200 OK", f.read()
 
+    # Animation demo
+    elif method == "GET" and url == "/eventloop.js":
+        with open("web_server/eventloop.js") as f:
+            return "200 OK", f.read()
+    elif method == "GET" and url == "/count":
+        return "200 OK", show_count()
+
     # Add comment post
     elif method == "POST" and url == "/add":
         params = form_decode(body)
@@ -101,6 +108,15 @@ def show_comments(session):
     for entry, who in ENTRIES:
         out += "<p>" + html.escape(entry) + "\n"
         out += "<i>by " + html.escape(who) + "</i></p>"
+    return out
+
+def show_count():
+    out = "<!doctype html>"
+    out += "<script src=/eventloop.js></script>"
+    out += "<div>"
+    out += "  Let's count up to 99!"
+    out += "</div>"
+    out += "<div>Output</div>"
     return out
 
 
