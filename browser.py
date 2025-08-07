@@ -8,9 +8,10 @@ import ssl
 import threading
 import urllib.parse
 import time
+import OpenGL.GL
 from css.css_parser import CSSParser, style
 from css.selectors import cascade_priority
-from draw import DrawLine, DrawOutline, DrawRect, DrawText, contains_point, linespace, paint_tree
+from draw import DrawLine, DrawOutline, DrawRect, DrawText, contains_point, linespace, paint_tree, PaintCommand, VisualEffect, CompositedLayer, DrawCompositedLayer, local_to_absolute, Blend, parse_transform, map_translation
 from font_cache import get_font
 from htmltree.htmlparser import HTMLParser
 from htmltree.tag import Element
@@ -69,9 +70,15 @@ class Browser:
         self.active_tab = None
         self.chrome = Chrome(self, URL)
         self.animation_timer = None
-        self.needs_raster_and_draw = False
+        # Dirty bits for pipeline
+        self.needs_composite = False
+        self.needs_raster = False
+        self.needs_draw = False
         self.needs_animation_frame = True
         self.measure = MeasureTime()
+        self.composited_layers = []
+        self.draw_list = []
+        self.composited_updates = {}
 
         if sdl2.SDL_BYTEORDER == sdl2.SDL_BIG_ENDIAN:
             self.RED_MASK = 0xff000000
@@ -84,21 +91,78 @@ class Browser:
             self.BLUE_MASK = 0x00ff0000
             self.ALPHA_MASK = 0xff000000
 
-        self.sdl_window = sdl2.SDL_CreateWindow(b"Browser",
-            sdl2.SDL_WINDOWPOS_CENTERED, sdl2.SDL_WINDOWPOS_CENTERED,
-            WIDTH, HEIGHT, sdl2.SDL_WINDOW_SHOWN)
+        # Try GPU path; fall back to CPU surfaces if unavailable
+        self.use_gpu = True
+        try:
+            self.sdl_window = sdl2.SDL_CreateWindow(
+                b"Browser",
+                sdl2.SDL_WINDOWPOS_CENTERED, sdl2.SDL_WINDOWPOS_CENTERED,
+                WIDTH, HEIGHT, sdl2.SDL_WINDOW_SHOWN | sdl2.SDL_WINDOW_OPENGL)
 
-        self.root_surface = skia.Surface.MakeRaster(
-            skia.ImageInfo.Make(
-                WIDTH, HEIGHT,
-                ct=skia.kRGBA_8888_ColorType,
-                at=skia.kUnpremul_AlphaType))
+            self.gl_context = sdl2.SDL_GL_CreateContext(self.sdl_window)
+            print(("OpenGL initialized: vendor={}," + 
+                   "renderer={}").format(
+                OpenGL.GL.glGetString(OpenGL.GL.GL_VENDOR),
+                OpenGL.GL.glGetString(OpenGL.GL.GL_RENDERER)))
 
-        self.chrome_surface = skia.Surface(WIDTH, math.ceil(self.chrome.bottom))
-        self.tab_surface = None
+            self.skia_context = skia.GrDirectContext.MakeGL()
+            if self.skia_context is None:
+                raise RuntimeError("Skia GL context not available")
 
-    def set_needs_raster_and_draw(self):
-        self.needs_raster_and_draw = True
+            self.root_surface = skia.Surface.MakeFromBackendRenderTarget(
+                self.skia_context,
+                skia.GrBackendRenderTarget(
+                    WIDTH, HEIGHT, 0, 0,
+                    skia.GrGLFramebufferInfo(0, OpenGL.GL.GL_RGBA8)),
+                skia.kBottomLeft_GrSurfaceOrigin,
+                skia.kRGBA_8888_ColorType,
+                skia.ColorSpace.MakeSRGB())
+            if self.root_surface is None:
+                raise RuntimeError("Failed to create GPU root surface")
+
+            self.chrome_surface = skia.Surface.MakeRenderTarget(
+                self.skia_context, skia.Budgeted.kNo,
+                skia.ImageInfo.MakeN32Premul(
+                    WIDTH, math.ceil(self.chrome.bottom)))
+            if self.chrome_surface is None:
+                raise RuntimeError("Failed to create GPU chrome surface")
+            self.tab_surface = None
+        except Exception:
+            # Fallback to CPU raster surfaces and non-GL window
+            self.use_gpu = False
+            try:
+                # Clean up GL resources if partially created
+                if hasattr(self, 'gl_context') and self.gl_context:
+                    sdl2.SDL_GL_DeleteContext(self.gl_context)
+                if hasattr(self, 'sdl_window') and self.sdl_window:
+                    sdl2.SDL_DestroyWindow(self.sdl_window)
+            except Exception:
+                pass
+
+            self.sdl_window = sdl2.SDL_CreateWindow(
+                b"Browser",
+                sdl2.SDL_WINDOWPOS_CENTERED, sdl2.SDL_WINDOWPOS_CENTERED,
+                WIDTH, HEIGHT, sdl2.SDL_WINDOW_SHOWN)
+
+            self.root_surface = skia.Surface.MakeRaster(
+                skia.ImageInfo.Make(
+                    WIDTH, HEIGHT,
+                    ct=skia.kRGBA_8888_ColorType,
+                    at=skia.kUnpremul_AlphaType))
+            self.chrome_surface = skia.Surface(WIDTH, math.ceil(self.chrome.bottom))
+            self.tab_surface = None
+
+    def set_needs_draw(self):
+        self.needs_draw = True
+
+    def set_needs_raster(self):
+        self.needs_raster = True
+        self.needs_draw = True
+
+    def set_needs_composite(self):
+        self.needs_composite = True
+        self.needs_raster = True
+        self.needs_draw = True
 
     # Tab management
     def new_tab(self, url):
@@ -106,23 +170,23 @@ class Browser:
         new_tab.load(url)
         self.active_tab = new_tab
         self.tabs.append(new_tab)
-        self.set_needs_raster_and_draw()
-        self.raster_and_draw()
+        self.set_needs_raster()
+        self.composite_raster_and_draw()
 
     # Event handlers
     def handle_scrolldown(self):
         self.active_tab.scrolldown()
-        self.set_needs_raster_and_draw()
+        self.set_needs_raster()
 
     def handle_scrollup(self):
         self.active_tab.scrollup()
-        self.set_needs_raster_and_draw()
+        self.set_needs_raster()
 
     def handle_click(self, e):
         if e.y < self.chrome.bottom:
             self.focus = None
             self.chrome.click(e.x, e.y)
-            self.set_needs_raster_and_draw()
+            self.set_needs_raster()
         else:
             self.focus = "content"
             self.chrome.blur()
@@ -132,35 +196,53 @@ class Browser:
             tab_y = e.y - self.chrome.bottom
             self.active_tab.click(e.x, tab_y)
             if self.active_tab.url != url:
-                self.set_needs_raster_and_draw()
+                self.set_needs_composite()
 
     def handle_key(self, e):
         if len(e) == 0: return
         if not (0x20 <= ord(e) < 0x7f): return
         if self.chrome.keypress(e):
-            self.set_needs_raster_and_draw()
+            self.set_needs_draw()
         elif self.focus == "content":
             self.active_tab.keypress(e)
-            self.set_needs_raster_and_draw()
+            self.set_needs_draw()
             
     def handle_enter(self):
         self.chrome.enter()
-        self.set_needs_raster_and_draw()
+        self.set_needs_composite()
 
     # Drawing
-    def raster_and_draw(self):
-        if not self.needs_raster_and_draw: return
+    def composite_raster_and_draw(self):
+        if not (self.needs_composite or self.needs_raster or self.needs_draw):
+            return
         self.measure.time('raster_and_draw')
-        self.raster_chrome()
-        self.raster_tab()
-        self.draw()
-        self.needs_raster_and_draw = False
+        if self.needs_composite:
+            self.composite()
+            # After compositing, rebuild draw list
+            self.paint_draw_list()
+        if self.needs_raster:
+            self.raster_chrome()
+            self.raster_tab()
+        if self.needs_draw:
+            # Ensure draw list reflects any updated effects
+            if self.composited_updates:
+                # Use provided updates to avoid recompositing/raster
+                # get_latest() will route Blend effects
+                pass
+            else:
+                self.paint_draw_list()
+            self.draw()
+        # Clear flags
+        self.needs_composite = False
+        self.needs_raster = False
+        self.needs_draw = False
+        self.composited_updates = {}
         self.measure.stop('raster_and_draw')
 
     def schedule_animation_frame(self):
         def callback():
             active_tab = self.active_tab
-            task = Task(active_tab.render)
+            task = Task(active_tab.run_animation_frame)
             active_tab.task_runner.schedule_task(task)
             self.animation_timer = None
             self.needs_animation_frame = False
@@ -173,12 +255,10 @@ class Browser:
             self.needs_animation_frame = True
 
     def raster_tab(self):
-        tab_height = math.ceil(self.active_tab.document.height)
-        if not self.tab_surface or tab_height != self.tab_surface.height():
-            self.tab_surface = skia.Surface(WIDTH, tab_height)
-        canvas = self.tab_surface.getCanvas()
-        canvas.clear(skia.ColorWHITE)
-        self.active_tab.raster(canvas)
+        if self.use_gpu:
+            # Raster all composited layers (no painting to root yet)
+            for layer in self.composited_layers:
+                layer.raster()
 
     def raster_chrome(self):
         canvas = self.chrome_surface.getCanvas()
@@ -195,7 +275,8 @@ class Browser:
         canvas.save()
         canvas.clipRect(tab_rect)
         canvas.translate(0, tab_offset)
-        self.tab_surface.draw(canvas, 0, 0)
+        for item in self.draw_list:
+            item.execute(canvas)
         canvas.restore()
 
         chrome_rect = skia.Rect.MakeLTRB(0, 0, WIDTH, self.chrome.bottom)
@@ -204,22 +285,79 @@ class Browser:
         self.chrome_surface.draw(canvas, 0, 0)
         canvas.restore()
 
-        skia_image = self.root_surface.makeImageSnapshot()
-        skia_bytes = skia_image.tobytes()
-        depth = 32 # Bits per pixel
-        pitch = 4 * WIDTH # Bytes per row
-        sdl_surface = sdl2.SDL_CreateRGBSurfaceFrom(
-            skia_bytes, WIDTH, HEIGHT, depth, pitch,
-            self.RED_MASK, self.GREEN_MASK,
-            self.BLUE_MASK, self.ALPHA_MASK)
+        if self.use_gpu:
+            self.root_surface.flushAndSubmit()
+            sdl2.SDL_GL_SwapWindow(self.sdl_window)
+        else:
+            skia_image = self.root_surface.makeImageSnapshot()
+            skia_bytes = skia_image.tobytes()
+            depth = 32 # Bits per pixel
+            pitch = 4 * WIDTH # Bytes per row
+            sdl_surface = sdl2.SDL_CreateRGBSurfaceFrom(
+                skia_bytes, WIDTH, HEIGHT, depth, pitch,
+                self.RED_MASK, self.GREEN_MASK,
+                self.BLUE_MASK, self.ALPHA_MASK)
 
-        rect = sdl2.SDL_Rect(0, 0, WIDTH, HEIGHT)
-        window_surface = sdl2.SDL_GetWindowSurface(self.sdl_window)
-        # SDL_BlitSurface is what actually does the copy.
-        sdl2.SDL_BlitSurface(sdl_surface, rect, window_surface, rect)
-        sdl2.SDL_UpdateWindowSurface(self.sdl_window)
+            rect = sdl2.SDL_Rect(0, 0, WIDTH, HEIGHT)
+            window_surface = sdl2.SDL_GetWindowSurface(self.sdl_window)
+            sdl2.SDL_BlitSurface(sdl_surface, rect, window_surface, rect)
+            sdl2.SDL_UpdateWindowSurface(self.sdl_window)
+
+    def composite(self):
+        # Walk display list, gather paint commands
+        all_commands = []
+        for cmd in self.active_tab.display_list:
+            all_commands = tree_to_list(cmd, all_commands)
+        paint_commands = [cmd for cmd in all_commands if isinstance(cmd, PaintCommand)]
+
+        self.composited_layers = []
+        for cmd in paint_commands:
+            # Try to merge into an existing compatible layer; otherwise create a new layer
+            placed = False
+            cmd_abs = local_to_absolute(cmd, cmd.rect)
+            for layer in reversed(self.composited_layers):
+                # If overlapping with existing layer, force new layer
+                if skia.Rect.Intersects(layer.absolute_bounds(), cmd_abs):
+                    continue
+                if layer.can_merge(cmd):
+                    layer.add(cmd)
+                    placed = True
+                    break
+            if not placed:
+                layer = CompositedLayer(self.skia_context, cmd)
+                self.composited_layers.append(layer)
+
+    def paint_draw_list(self):
+        self.draw_list = []
+        new_effects = {}
+        for composited_layer in self.composited_layers:
+            current_effect = DrawCompositedLayer(composited_layer)
+            if not composited_layer.display_items:
+                continue
+            parent = getattr(composited_layer.display_items[0], 'parent', None)
+            while parent:
+                new_parent = self.get_latest(parent)
+                if new_parent in new_effects:
+                    # Attach current_effect under existing cloned effect
+                    new_effects[new_parent].children.append(current_effect)
+                    break
+                else:
+                    if isinstance(new_parent, VisualEffect):
+                        current_effect = new_parent.clone(current_effect)
+                        new_effects[new_parent] = current_effect
+                    parent = getattr(parent, 'parent', None)
+            if not getattr(parent, 'parent', None):
+                self.draw_list.append(current_effect)
+
+    def get_latest(self, effect):
+        node = getattr(effect, 'node', None)
+        if node in self.composited_updates and isinstance(effect, Blend):
+            return self.composited_updates[node]
+        return effect
 
     def handle_quit(self):
+        if getattr(self, 'use_gpu', False):
+            sdl2.SDL_GL_DeleteContext(self.gl_context)
         sdl2.SDL_DestroyWindow(self.sdl_window)
         # Finish tracing
         self.measure.finish()
@@ -616,12 +754,23 @@ class Tab:
         self.scroll = 0
         self.history = []
         self.focus = None
-        self.needs_render = False
+        self.needs_style = False
+        self.needs_layout = False
+        self.needs_paint = False
         self.browser = browser
         self.js = None
+        self.composited_updates = []
 
     def set_needs_render(self):
-        self.needs_render = True
+        self.needs_style = True
+        self.browser.set_needs_animation_frame(self)
+
+    def set_needs_layout(self):
+        self.needs_layout = True
+        self.browser.set_needs_animation_frame(self)
+
+    def set_needs_paint(self):
+        self.needs_paint = True
         self.browser.set_needs_animation_frame(self)
 
     def load(self, url, payload=None):
@@ -682,21 +831,75 @@ class Tab:
         return self.allowed_origins == None or url.origin() in self.allowed_origins
     
     def render(self):
-        if not self.needs_render: return
         self.browser.measure.time('render')
+
+        style_ran = False
+        layout_ran = False
+        paint_ran = False
+
+        if self.needs_style:
+            style(self.nodes, sorted(self.rules, key=cascade_priority), self)
+            self.needs_layout = True
+            self.needs_style = False
+            style_ran = True
+
+        if self.needs_layout:
+            self.document = DocumentLayout(self.nodes)
+            self.document.layout()
+            self.needs_paint = True
+            self.needs_layout = False
+            layout_ran = True
+
+        if self.needs_paint:
+            self.display_list = []
+            paint_tree(self.document, self.display_list)
+            self.needs_paint = False
+            paint_ran = True
+
+        # After render steps complete, set appropriate browser flags
+        if style_ran:
+            self.browser.set_needs_composite()
+        elif layout_ran:
+            self.browser.set_needs_raster()
+        elif paint_ran:
+            self.browser.set_needs_draw()
+
+        self.browser.measure.stop('render')
+
+    def run_animation_frame(self):
+        # Run RAF handlers first
         if self.js and not self.js.discarded:
-            # Measure RAF handler execution separately
             self.browser.measure.time('evaljs __runRAFHandlers')
             self.js.interp.evaljs("__runRAFHandlers()")
             self.browser.measure.stop('evaljs __runRAFHandlers')
-        style(self.nodes, sorted(self.rules, key=cascade_priority))
-        self.document = DocumentLayout(self.nodes)
-        self.document.layout()
-        self.display_list = []
-        paint_tree(self.document, self.display_list)
-        self.needs_render = False
-        self.browser.set_needs_raster_and_draw()
-        self.browser.measure.stop('render')
+
+        # Drive CSS transitions: update active animations and request layout-only
+        updated = False
+        for node in tree_to_list(self.nodes, []):
+            animations = getattr(node, 'animations', {})
+            for (prop, animation) in list(animations.items()):
+                value = animation.animate()
+                if value is not None:
+                    node.style[prop] = value
+                    updated = True
+                    self.composited_updates.append(node)
+                else:
+                    # Animation finished
+                    del animations[prop]
+        # If we updated only composited properties (like opacity), avoid layout
+        needs_composite = self.needs_style or self.needs_layout
+        if updated:
+            self.set_needs_paint()
+        self.render()
+        if updated and not needs_composite:
+            # Provide updated effects to the browser to skip composite/raster
+            updates = {}
+            for node in self.composited_updates:
+                if hasattr(node, 'blend_op'):
+                    updates[node] = node.blend_op
+            self.browser.composited_updates = updates
+            self.composited_updates = []
+            self.browser.set_needs_draw()
 
     def raster(self, canvas):
         for cmd in self.display_list:
@@ -744,9 +947,17 @@ class Tab:
             self.focus.is_focused = False
         self.focus = None
         y += self.scroll
+        # Hit testing with transforms: compute absolute bounds
+        loc_rect = skia.Rect.MakeXYWH(x, y, 1, 1)
+        def absolute_bounds_for_obj(obj):
+            rect = skia.Rect.MakeXYWH(obj.x, obj.y, obj.width, obj.height)
+            cur = obj.node
+            while cur:
+                rect = map_translation(rect, parse_transform(cur.style.get("transform", "")))
+                cur = getattr(cur, 'parent', None)
+            return rect
         objs = [obj for obj in tree_to_list(self.document, [])
-        if obj.x <= x < obj.x + obj.width
-        and obj.y <= y < obj.y + obj.height]
+                if absolute_bounds_for_obj(obj).intersects(loc_rect)]
         if not objs: return
         elt = objs[-1].node
         while elt:
@@ -805,7 +1016,7 @@ def mainloop(browser):
         
         # Run the task runner
         browser.active_tab.task_runner.run()
-        browser.raster_and_draw()
+        browser.composite_raster_and_draw()
         browser.schedule_animation_frame()
 
 if __name__ == "__main__":

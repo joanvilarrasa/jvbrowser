@@ -1,6 +1,9 @@
 from css.selectors import DescendantSelector, TagSelector
 from htmltree.tag import Element
 
+# Local frame duration to compute transition frames (approx 30fps)
+REFRESH_RATE_SEC = 0.033
+
 INHERITED_PROPERTIES = {
     "font-size": "16px",
     "font-style": "normal",
@@ -49,10 +52,11 @@ class CSSParser:
         pairs = {}
         while self.i < len(self.s) and self.s[self.i] != "}":
             try:
-                prop, val = self.pair()
+                prop, val = self.pair([";", "}"])
                 pairs[prop] = val
                 self.whitespace()
-                self.literal(";")
+                if self.i < len(self.s) and self.s[self.i] == ";":
+                    self.literal(";")
                 self.whitespace()
             except Exception:
                 why = self.ignore_until([";", "}"])
@@ -63,13 +67,22 @@ class CSSParser:
                     break
         return pairs
 
-    def pair(self):
+    def pair(self, until=None):
         prop = self.word()
         self.whitespace()
         self.literal(":")
         self.whitespace()
-        val = self.word()
-        return prop.casefold(), val
+        if until is None:
+            val = self.word()
+        else:
+            val = self.until_chars(until)
+        return prop.casefold(), val.strip()
+
+    def until_chars(self, chars):
+        start = self.i
+        while self.i < len(self.s) and self.s[self.i] not in chars:
+            self.i += 1
+        return self.s[start:self.i]
 
     def whitespace(self):
         while self.i < len(self.s) and self.s[self.i].isspace():
@@ -99,7 +112,57 @@ class CSSParser:
                 self.i += 1
         return None
 
-def style(node, rules):
+def parse_transition(value):
+    properties = {}
+    if not value:
+        return properties
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = item.split(" ", 1)
+        if len(parts) != 2:
+            continue
+        property, duration = parts
+        duration = duration.strip()
+        try:
+            # assume seconds unit 's'
+            seconds = float(duration[:-1]) if duration.endswith('s') else float(duration)
+            frames = int(seconds / REFRESH_RATE_SEC)
+            properties[property] = max(frames, 1)
+        except Exception:
+            continue
+    return properties
+
+def diff_styles(old_style, new_style):
+    transitions = {}
+    transition_spec = parse_transition(new_style.get("transition"))
+    for property, num_frames in transition_spec.items():
+        if property not in old_style: continue
+        if property not in new_style: continue
+        old_value = old_style[property]
+        new_value = new_style[property]
+        if old_value == new_value: continue
+        transitions[property] = (old_value, new_value, num_frames)
+    return transitions
+
+class NumericAnimation:
+    def __init__(self, old_value, new_value, num_frames):
+        self.old_value = float(old_value)
+        self.new_value = float(new_value)
+        self.num_frames = max(int(num_frames), 1)
+        self.frame_count = 1
+        total_change = self.new_value - self.old_value
+        self.change_per_frame = total_change / self.num_frames
+
+    def animate(self):
+        self.frame_count += 1
+        if self.frame_count >= self.num_frames:
+            return None
+        current_value = self.old_value + self.change_per_frame * self.frame_count
+        return str(current_value)
+
+def style(node, rules, tab=None):
     node.style = {}
     # Inhetited properties
     for property, default_value in INHERITED_PROPERTIES.items():
@@ -131,5 +194,28 @@ def style(node, rules):
         parent_px = float(parent_font_size[:-2])
         node.style["font-size"] = str(node_pct * parent_px) + "px"
 
+    # CSS transitions
+    if not hasattr(node, 'animations'):
+        try:
+            # Attach animations dict lazily; callers may not be Element/Text
+            node.animations = {}
+        except Exception:
+            pass
+
+    if 'style' in dir(node) and isinstance(node, Element):
+        old_style = getattr(node, 'old_style', None)
+        if old_style:
+            transitions = diff_styles(old_style, node.style)
+            for property, (old_value, new_value, num_frames) in transitions.items():
+                if property == 'opacity':
+                    if tab is not None:
+                        tab.set_needs_render()
+                    animation = NumericAnimation(old_value, new_value, num_frames)
+                    node.animations[property] = animation
+                    value = animation.animate()
+                    if value is not None:
+                        node.style[property] = value
+        node.old_style = dict(node.style)
+
     for child in node.children:
-        style(child, rules)
+        style(child, rules, tab)

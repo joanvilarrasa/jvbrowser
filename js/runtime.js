@@ -68,6 +68,12 @@ Object.defineProperty(Node.prototype, 'innerHTML', {
     }
 });
 
+Object.defineProperty(Node.prototype, 'style', {
+    set: function(s) {
+        call_python("style_set", this.handle, s.toString());
+    }
+});
+
 // XMLHttpRequest
 function XMLHttpRequest() {
     this.handle = Object.keys(XHR_REQUESTS).length;
