@@ -1,12 +1,13 @@
 from typing import Literal
 import skia
-from draw import DrawRRect, paint_visual_effects
+from draw import DrawRRect, paint_visual_effects, paint_outline
 from font_cache import get_font
 from layout.input_layout import INPUT_WIDTH_PX, InputLayout
 from layout.line_layout import LineLayout
 from layout.text_layout import TextLayout
 from htmltree.tag import Element
 from htmltree.text import Text
+from utils import dpx
 
 BLOCK_ELEMENTS = [
     "html", "body", "article", "section", "nav", "aside",
@@ -32,6 +33,11 @@ class BlockLayout:
         self.parent = parent
         self.previous = previous
         self.children = []
+        # Link layout object
+        try:
+            self.node.layout_object = self
+        except Exception:
+            pass
 
         # Layout state
         self.line = []
@@ -49,6 +55,7 @@ class BlockLayout:
         self.height = None
 
     def layout(self):
+        self.zoom = getattr(self.parent, 'zoom', 1)
         self.x = self.parent.x
         self.width = self.parent.width
         if self.previous:
@@ -154,7 +161,8 @@ class BlockLayout:
         weight = node.style["font-weight"]
         style = node.style["font-style"]
         if style == "normal": style = "roman"
-        size = int(float(node.style["font-size"][:-2]) * .75)
+        px_size = float(node.style["font-size"][:-2])
+        size = dpx(px_size * 0.75, self.zoom)
         color = node.style["color"]
         font = get_font(size, weight, style)
 
@@ -171,7 +179,7 @@ class BlockLayout:
 
     # Handle input and button tags
     def input(self, node):
-        w = INPUT_WIDTH_PX
+        w = dpx(INPUT_WIDTH_PX, self.zoom)
         if self.cursor_x + w > self.width:
             self.new_line()
         line = self.children[-1]
@@ -182,7 +190,8 @@ class BlockLayout:
         weight = node.style["font-weight"]
         style = node.style["font-style"]
         if style == "normal": style = "roman"
-        size = int(float(node.style["font-size"][:-2]) * .75)
+        px_size = float(node.style["font-size"][:-2])
+        size = dpx(px_size * 0.75, self.zoom)
         font = get_font(size, weight, style)
 
         self.cursor_x += w + font.measureText(" ")
@@ -190,6 +199,7 @@ class BlockLayout:
     def paint_effects(self, cmds):
         cmds = paint_visual_effects(
             self.node, cmds, self.self_rect())
+        paint_outline(self.node, cmds, self.self_rect(), getattr(self, 'zoom', 1))
         return cmds
 
     def self_rect(self):

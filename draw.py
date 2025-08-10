@@ -1,4 +1,5 @@
 import skia
+from utils import dpx
 
 NAMED_COLORS = {
     "black": "#000000",
@@ -539,3 +540,22 @@ class DrawCompositedLayer(PaintCommand):
                 canvas.restore()
                 return
         layer.surface.draw(canvas, bounds.left(), bounds.top())
+
+def parse_outline(outline_str):
+    if not outline_str: return None
+    values = outline_str.split(" ")
+    if len(values) != 3: return None
+    if values[1] != "solid": return None
+    try:
+        thickness = int(values[0][:-2])
+    except Exception:
+        return None
+    color = values[2]
+    return thickness, color
+
+
+def paint_outline(node, cmds, rect, zoom):
+    outline = parse_outline(node.style.get("outline"))
+    if not outline: return
+    thickness, color = outline
+    cmds.append(DrawOutline(rect, color, dpx(thickness, zoom)))

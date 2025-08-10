@@ -74,6 +74,10 @@ Object.defineProperty(Node.prototype, 'style', {
     }
 });
 
+Node.prototype.setAttribute = function(attr, value) {
+    return call_python("setAttribute", this.handle, attr, value);
+}
+
 // XMLHttpRequest
 function XMLHttpRequest() {
     this.handle = Object.keys(XHR_REQUESTS).length;

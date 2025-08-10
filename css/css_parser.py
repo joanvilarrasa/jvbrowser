@@ -1,4 +1,4 @@
-from css.selectors import DescendantSelector, TagSelector
+from css.selectors import DescendantSelector, TagSelector, PseudoclassSelector, PseudoclassSelector
 from htmltree.tag import Element
 
 # Local frame duration to compute transition frames (approx 30fps)
@@ -19,15 +19,29 @@ class CSSParser:
 
     def parse(self):
         rules = []
+        media = None
         while self.i < len(self.s):
             try:
                 self.whitespace()
-                selector = self.selector()
-                self.literal("{")
-                self.whitespace()
-                body = self.body()
-                self.literal("}")
-                rules.append((selector, body))
+                if self.i < len(self.s) and self.s[self.i] == "@" and not media:
+                    prop, val = self.media_query()
+                    if prop == "prefers-color-scheme" and \
+                        val in ["dark", "light"]:
+                        media = val
+                    self.whitespace()
+                    self.literal("{")
+                    self.whitespace()
+                elif self.i < len(self.s) and self.s[self.i] == "}" and media:
+                    self.literal("}")
+                    media = None
+                    self.whitespace()
+                else:
+                    selector = self.selector()
+                    self.literal("{")
+                    self.whitespace()
+                    body = self.body()
+                    self.literal("}")
+                    rules.append((media, selector, body))
             except Exception:
                 why = self.ignore_until(["}"])
                 if why == "}":
@@ -37,16 +51,33 @@ class CSSParser:
                     break
         return rules
 
+    def media_query(self):
+        self.literal("@")
+        assert self.word() == "media"
+        self.whitespace()
+        self.literal("(")
+        self.whitespace()
+        prop, val = self.pair([")"])
+        self.whitespace()
+        self.literal(")")
+        return prop, val
+
     def selector(self):
-        out = TagSelector(self.word().casefold())
+        out = self.simple_selector()
         self.whitespace()
         while self.i < len(self.s) and self.s[self.i] != "{":
-            tag = self.word()
-            descendant = TagSelector(tag.casefold())
+            descendant = self.simple_selector()
             out = DescendantSelector(out, descendant)
             self.whitespace()
         return out
 
+    def simple_selector(self):
+        out = TagSelector(self.word().casefold())
+        if self.i < len(self.s) and self.s[self.i] == ":":
+            self.literal(":")
+            pseudoclass = self.word().casefold()
+            out = PseudoclassSelector(pseudoclass, out)
+        return out
 
     def body(self):
         pairs = {}
@@ -172,7 +203,15 @@ def style(node, rules, tab=None):
             node.style[property] = default_value
 
     # Properties from rules (the stylesheet)
-    for selector, body in rules:
+    for rule in rules:
+        if len(rule) == 2:
+            selector, body = rule
+            media = None
+        else:
+            media, selector, body = rule
+        if media and tab is not None:
+            if (media == "dark") != bool(getattr(tab, 'dark_mode', False)):
+                continue
         if not selector.matches(node): continue
         for property, value in body.items():
             node.style[property] = value

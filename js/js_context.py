@@ -21,6 +21,7 @@ class JSContext:
         self.interp.export_function("style_set", self.style_set)
         self.interp.export_function("setTimeout",self.setTimeout)
         self.interp.export_function("requestAnimationFrame", self.requestAnimationFrame)
+        self.interp.export_function("setAttribute", self.setAttribute)
         self.interp.evaljs(RUNTIME_JS)
         self.node_to_handle = {}
         self.handle_to_node = {}
@@ -76,6 +77,11 @@ class JSContext:
     def style_set(self, handle, s):
         elt = self.handle_to_node[handle]
         elt.attributes["style"] = s
+        self.tab.set_needs_render()
+
+    def setAttribute(self, handle, attr, value):
+        elt = self.handle_to_node[handle]
+        elt.attributes[attr] = value
         self.tab.set_needs_render()
 
     def XMLHttpRequest_send(

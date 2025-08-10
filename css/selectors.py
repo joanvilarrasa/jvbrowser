@@ -21,7 +21,25 @@ class DescendantSelector:
             node = node.parent
         return False
 
+class PseudoclassSelector:
+    def __init__(self, pseudoclass, base):
+        self.pseudoclass = pseudoclass
+        self.base = base
+        self.priority = self.base.priority
+
+    def matches(self, node):
+        if not self.base.matches(node):
+            return False
+        if self.pseudoclass == "focus":
+            return getattr(node, 'is_focused', False)
+        else:
+            return False
+
+
 def cascade_priority(rule):
-    selector, body = rule
+    if len(rule) == 3:
+        _, selector, _ = rule
+    else:
+        selector, _ = rule
     return selector.priority
 

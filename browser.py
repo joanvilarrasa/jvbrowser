@@ -9,7 +9,14 @@ import threading
 import urllib.parse
 import time
 import OpenGL.GL
-from css.css_parser import CSSParser, style
+import os
+try:
+    import gtts
+    import playsound
+    HAVE_TTS = True
+except Exception:
+    HAVE_TTS = False
+from css.css_parser import CSSParser, style, INHERITED_PROPERTIES
 from css.selectors import cascade_priority
 from draw import DrawLine, DrawOutline, DrawRect, DrawText, contains_point, linespace, paint_tree, PaintCommand, VisualEffect, CompositedLayer, DrawCompositedLayer, local_to_absolute, Blend, parse_transform, map_translation
 from font_cache import get_font
@@ -20,7 +27,22 @@ from js.js_context import JSContext
 from layout.block_layout import HEIGHT, VSTEP, WIDTH
 from layout.document_layout import DocumentLayout
 from task import Task, TaskRunner
-from utils import tree_to_list
+from utils import tree_to_list, dpx
+from accessibility import AccessibilityNode
+
+SPEECH_FILE = "/tmp/speech-fragment.mp3"
+
+def speak_text(text):
+    print("SPEAK:", text)
+    if not HAVE_TTS:
+        return
+    try:
+        tts = gtts.gTTS(text)
+        tts.save(SPEECH_FILE)
+        playsound.playsound(SPEECH_FILE)
+        os.remove(SPEECH_FILE)
+    except Exception:
+        pass
 
 SCROLL_STEP = 100
 DEFAULT_STYLE_SHEET = CSSParser(open("css/default.css").read()).parse()
@@ -66,6 +88,7 @@ class MeasureTime:
 
 class Browser:
     def __init__(self):
+        self.dark_mode = False
         self.tabs = []
         self.active_tab = None
         self.chrome = Chrome(self, URL)
@@ -79,7 +102,20 @@ class Browser:
         self.composited_layers = []
         self.draw_list = []
         self.composited_updates = {}
-
+        # Accessibility state
+        self.needs_accessibility = False
+        self.accessibility_is_on = False
+        self.accessibility_tree = None
+        self.has_spoken_document = False
+        self.tab_focus = None
+        self.last_tab_focus = None
+        self.focus_a11y_node = None
+        self.pending_hover = None
+        self.hovered_a11y_node = None
+        self.needs_speak_hovered_node = False
+        self.active_alerts = []
+        self.spoken_alerts = []
+        
         if sdl2.SDL_BYTEORDER == sdl2.SDL_BIG_ENDIAN:
             self.RED_MASK = 0xff000000
             self.GREEN_MASK = 0x00ff0000
@@ -152,6 +188,21 @@ class Browser:
             self.chrome_surface = skia.Surface(WIDTH, math.ceil(self.chrome.bottom))
             self.tab_surface = None
 
+    def set_active_tab(self, tab):
+        self.active_tab = tab
+        task = Task(self.active_tab.set_dark_mode, self.dark_mode)
+        self.active_tab.task_runner.schedule_task(task)
+        self.set_needs_raster()
+
+    def toggle_dark_mode(self):
+        self.dark_mode = not self.dark_mode
+        # Update active tab to re-style and re-render content
+        if self.active_tab is not None:
+            task = Task(self.active_tab.set_dark_mode, self.dark_mode)
+            self.active_tab.task_runner.schedule_task(task)
+        # Ensure chrome repaints as well
+        self.set_needs_raster()
+
     def set_needs_draw(self):
         self.needs_draw = True
 
@@ -164,6 +215,16 @@ class Browser:
         self.needs_raster = True
         self.needs_draw = True
 
+    def set_needs_accessibility(self):
+        if not self.accessibility_is_on:
+            return
+        self.needs_accessibility = True
+        self.needs_draw = True
+
+    def toggle_accessibility(self):
+        self.accessibility_is_on = not self.accessibility_is_on
+        self.set_needs_accessibility()
+
     # Tab management
     def new_tab(self, url):
         new_tab = Tab(self, HEIGHT - self.chrome.bottom)
@@ -172,6 +233,15 @@ class Browser:
         self.tabs.append(new_tab)
         self.set_needs_raster()
         self.composite_raster_and_draw()
+
+    # Zoom controls
+    def increment_zoom(self, increment):
+        task = Task(self.active_tab.zoom_by, increment)
+        self.active_tab.task_runner.schedule_task(task)
+
+    def reset_zoom(self):
+        task = Task(self.active_tab.reset_zoom)
+        self.active_tab.task_runner.schedule_task(task)
 
     # Event handlers
     def handle_scrolldown(self):
@@ -213,7 +283,7 @@ class Browser:
 
     # Drawing
     def composite_raster_and_draw(self):
-        if not (self.needs_composite or self.needs_raster or self.needs_draw):
+        if not (self.needs_composite or self.needs_raster or self.needs_draw or self.needs_accessibility):
             return
         self.measure.time('raster_and_draw')
         if self.needs_composite:
@@ -232,6 +302,8 @@ class Browser:
             else:
                 self.paint_draw_list()
             self.draw()
+        if self.needs_accessibility:
+            self.update_accessibility()
         # Clear flags
         self.needs_composite = False
         self.needs_raster = False
@@ -262,13 +334,20 @@ class Browser:
 
     def raster_chrome(self):
         canvas = self.chrome_surface.getCanvas()
-        canvas.clear(skia.ColorWHITE)
+        if self.dark_mode:
+            background_color = skia.ColorBLACK
+        else:
+            background_color = skia.ColorWHITE
+        canvas.clear(background_color)
         for cmd in self.chrome.paint():
             cmd.execute(canvas)
 
     def draw(self):
         canvas = self.root_surface.getCanvas()
-        canvas.clear(skia.ColorWHITE)
+        if self.dark_mode:
+            canvas.clear(skia.ColorBLACK)
+        else:
+            canvas.clear(skia.ColorWHITE)
 
         tab_rect = skia.Rect.MakeLTRB(0, self.chrome.bottom, WIDTH, HEIGHT)
         tab_offset = self.chrome.bottom - self.active_tab.scroll
@@ -348,6 +427,21 @@ class Browser:
                     parent = getattr(parent, 'parent', None)
             if not getattr(parent, 'parent', None):
                 self.draw_list.append(current_effect)
+        # Handle hover highlighting via accessibility tree
+        if self.pending_hover and self.accessibility_tree:
+            (x, y) = self.pending_hover
+            # Account for scroll in page content space
+            y += self.active_tab.scroll
+            a11y_node = self.accessibility_tree.hit_test(x, y)
+            if a11y_node:
+                if (not self.hovered_a11y_node) or (a11y_node.node != self.hovered_a11y_node.node):
+                    self.needs_speak_hovered_node = True
+                self.hovered_a11y_node = a11y_node
+            self.pending_hover = None
+        if self.hovered_a11y_node:
+            color = "white" if self.dark_mode else "black"
+            for bound in getattr(self.hovered_a11y_node, 'bounds', []):
+                self.draw_list.append(DrawOutline(bound, color, 2))
 
     def get_latest(self, effect):
         node = getattr(effect, 'node', None)
@@ -361,6 +455,73 @@ class Browser:
         sdl2.SDL_DestroyWindow(self.sdl_window)
         # Finish tracing
         self.measure.finish()
+
+    def go_back(self):
+        if self.active_tab:
+            self.active_tab.go_back()
+            self.set_needs_composite()
+
+    def focus_addressbar(self):
+        self.chrome.focus_addressbar()
+        self.set_needs_raster()
+
+    def cycle_tabs(self):
+        if not self.tabs: return
+        if self.active_tab not in self.tabs: return
+        active_idx = self.tabs.index(self.active_tab)
+        new_active_idx = (active_idx + 1) % len(self.tabs)
+        self.set_active_tab(self.tabs[new_active_idx])
+
+    def handle_tab(self):
+        self.focus = "content"
+        task = Task(self.active_tab.advance_tab)
+        self.active_tab.task_runner.schedule_task(task)
+
+    def update_accessibility(self):
+        if not self.accessibility_tree:
+            return
+        if not self.has_spoken_document:
+            self.speak_document()
+            self.has_spoken_document = True
+        # Alerts: refresh spoken mapping when tree rebuilt
+        self.active_alerts = [node for node in tree_to_list(self.accessibility_tree, []) if getattr(node, 'role', None) == 'alert']
+        new_spoken_alerts = []
+        for old_node in getattr(self, 'spoken_alerts', []):
+            new_nodes = [node for node in tree_to_list(self.accessibility_tree, []) if node.node == old_node.node and getattr(node, 'role', None) == 'alert']
+            if new_nodes:
+                new_spoken_alerts.append(new_nodes[0])
+        self.spoken_alerts = new_spoken_alerts if hasattr(self, 'spoken_alerts') else []
+        for alert in self.active_alerts:
+            if alert not in self.spoken_alerts:
+                self.speak_node(alert, "New alert ")
+                self.spoken_alerts.append(alert)
+        if self.tab_focus and self.tab_focus != self.last_tab_focus:
+            nodes = [node for node in tree_to_list(self.accessibility_tree, []) if node.node == self.tab_focus]
+            if nodes:
+                self.focus_a11y_node = nodes[0]
+                self.speak_node(self.focus_a11y_node, "element focused ")
+            self.last_tab_focus = self.tab_focus
+        if self.needs_speak_hovered_node and self.hovered_a11y_node:
+            self.speak_node(self.hovered_a11y_node, "Hit test ")
+        self.needs_speak_hovered_node = False
+        # Reset flag
+        self.needs_accessibility = False
+
+    def speak_document(self):
+        text = "Here are the document contents: "
+        tree_list = tree_to_list(self.accessibility_tree, [])
+        for accessibility_node in tree_list:
+            new_text = getattr(accessibility_node, 'text', '')
+            if new_text:
+                text += "\n" + new_text
+        speak_text(text)
+
+    def speak_node(self, node, text):
+        t = text + getattr(node, 'text', '')
+        if t and node.children and node.children[0].role == "StaticText":
+            t += " " + node.children[0].text
+        if t:
+            speak_text(t)
 
 class URL:    
     def __init__(self, url):
@@ -634,58 +795,66 @@ class Chrome:
     def paint(self):
         cmds = []
 
-        # Paint background as white
+        # Colors based on dark mode
+        if self.browser.dark_mode:
+            fg = "white"
+            bg = "black"
+        else:
+            fg = "black"
+            bg = "white"
+
+        # Paint background
         cmds.append(DrawRect(
             skia.Rect.MakeXYWH(0, 0, WIDTH, self.bottom),
-            "white"))
+            bg))
         cmds.append(DrawLine(
             0, self.bottom, WIDTH,
-            self.bottom, "black", 1))
+            self.bottom, fg, 1))
 
-        cmds.append(DrawOutline(self.newtab_rect, "black", 1))
+        cmds.append(DrawOutline(self.newtab_rect, fg, 1))
 
         # Paint tabs bar new tab button
         cmds.append(DrawText(
             self.newtab_rect.left() + self.padding,
             self.newtab_rect.top(),
-            "+", self.font, "black"))
+            "+", self.font, fg))
 
         # Paint tabs bar tabs
         for i, tab in enumerate(self.browser.tabs):
             bounds = self.tab_rect(i)
             cmds.append(DrawLine(
                 bounds.left(), 0, bounds.left(), bounds.bottom(),
-                "black", 1))
+                fg, 1))
             cmds.append(DrawLine(
                 bounds.right(), 0, bounds.right(), bounds.bottom(),
-                "black", 1))
+                fg, 1))
             cmds.append(DrawText(
                 bounds.left() + self.padding, bounds.top() + self.padding,
-                "Tab {}".format(i), self.font, "black"))
+                "Tab {}".format(i), self.font, fg))
 
             if tab == self.browser.active_tab:
                 cmds.append(DrawLine(
                     0, bounds.bottom(), bounds.left(), bounds.bottom(),
-                    "black", 1))
+                    fg, 1))
                 cmds.append(DrawLine(
                     bounds.right(), bounds.bottom(), WIDTH, bounds.bottom(),
-                    "black", 1))
+                    fg, 1))
 
         # Paint url bar back button
-        cmds.append(DrawOutline(self.back_rect, "black", 1))
+        cmds.append(DrawOutline(self.back_rect, fg, 1))
         cmds.append(DrawText(
             self.back_rect.left() + self.padding,
             self.back_rect.top(),
-            "<", self.font, "black"))
+            "<", self.font, fg))
 
         # Paint url bar address
-        cmds.append(DrawOutline(self.address_rect, "black", 1))
+        cmds.append(DrawOutline(self.address_rect, fg, 1))
         url = str(self.browser.active_tab.url)
         if self.focus == "address bar":
             cmds.append(DrawText(
                 self.address_rect.left() + self.padding,
                 self.address_rect.top(),
-                self.address_bar, self.font, "black"))
+                self.address_bar, self.font, fg))
             w = self.font.measureText(self.address_bar)
             cmds.append(DrawLine(
                 self.address_rect.left() + self.padding + w,
@@ -698,7 +867,7 @@ class Chrome:
             cmds.append(DrawText(
                 self.address_rect.left() + self.padding,
                 self.address_rect.top(),
-                url, self.font, "black"))
+                url, self.font, fg))
 
         return cmds
 
@@ -721,7 +890,7 @@ class Chrome:
         else:
             for i, tab in enumerate(self.browser.tabs):
                 if contains_point(self.tab_rect(i), x, y):
-                    self.browser.active_tab = tab
+                    self.browser.set_active_tab(tab)
                     break
 
     def keypress(self, char):
@@ -739,6 +908,10 @@ class Chrome:
 
     def blur(self):
         self.focus = None
+
+    def focus_addressbar(self):
+        self.focus = "address bar"
+        self.address_bar = ""
 
 class Tab:
     def __init__(self, browser, tab_height):
@@ -760,6 +933,11 @@ class Tab:
         self.browser = browser
         self.js = None
         self.composited_updates = []
+        self.zoom = 1
+        self.dark_mode = browser.dark_mode
+        self.needs_focus_scroll = False
+        # Accessibility state
+        self.accessibility_tree = None
 
     def set_needs_render(self):
         self.needs_style = True
@@ -774,6 +952,8 @@ class Tab:
         self.browser.set_needs_animation_frame(self)
 
     def load(self, url, payload=None):
+        self.focus = None
+        self.zoom = 1
         headers, body = url.request(self.url, payload)
         self.url = url
         self.history.append(url)
@@ -838,6 +1018,11 @@ class Tab:
         paint_ran = False
 
         if self.needs_style:
+            # Adjust default color based on dark mode
+            if self.dark_mode:
+                INHERITED_PROPERTIES["color"] = "white"
+            else:
+                INHERITED_PROPERTIES["color"] = "black"
             style(self.nodes, sorted(self.rules, key=cascade_priority), self)
             self.needs_layout = True
             self.needs_style = False
@@ -845,10 +1030,16 @@ class Tab:
 
         if self.needs_layout:
             self.document = DocumentLayout(self.nodes)
-            self.document.layout()
+            self.document.layout(self.zoom)
+            self.needs_accessibility = True
             self.needs_paint = True
             self.needs_layout = False
             layout_ran = True
+
+        if self.needs_accessibility:
+            self.accessibility_tree = AccessibilityNode(self.nodes)
+            self.accessibility_tree.build()
+            self.needs_accessibility = False
 
         if self.needs_paint:
             self.display_list = []
@@ -901,6 +1092,18 @@ class Tab:
             self.composited_updates = []
             self.browser.set_needs_draw()
 
+        if getattr(self, 'needs_focus_scroll', False) and self.focus:
+            self.scroll_to(self.focus)
+        self.needs_focus_scroll = False
+        # Send accessibility tree and focus to browser
+        if getattr(self, 'accessibility_tree', None) is not None:
+            self.browser.accessibility_tree = self.accessibility_tree
+            self.browser.tab_focus = self.focus
+            # trigger accessibility update
+            self.browser.set_needs_accessibility()
+            # clear to avoid races; will be rebuilt if needed
+            self.accessibility_tree = None
+
     def raster(self, canvas):
         for cmd in self.display_list:
             cmd.execute(canvas)
@@ -928,7 +1131,7 @@ class Tab:
 
     # Event handlers
     def scrolldown(self):
-        max_y = max(self.document.height + 2*VSTEP - self.tab_height, 0)
+        max_y = max(self.document.height + 2*dpx(VSTEP, self.zoom) - self.tab_height, 0)
         self.scroll = min(self.scroll + SCROLL_STEP, max_y)
 
     def scrollup(self):
@@ -963,34 +1166,112 @@ class Tab:
         while elt:
             if isinstance(elt, Text):
                 pass
-            elif elt.tag == "a" and "href" in elt.attributes:
-                if self.js.dispatch_event("click", elt): return
-                url = self.url.resolve(elt.attributes["href"])
-                return self.load(url)
-            elif elt.tag == "input":
-                if self.js.dispatch_event("click", elt): return
-                elt.attributes["value"] = ""
-                self.focus = elt
-                elt.is_focused = True
-                self.set_needs_render()
-                return self.render()
-            elif elt.tag == "button":
-                if self.js.dispatch_event("click", elt): return
-                while elt:
-                    if elt.tag == "form" and "action" in elt.attributes:
-                        return self.submit_form(elt)
-                    elt = elt.parent
+            elif isinstance(elt, Element) and is_focusable(elt):
+                self.focus_element(elt)
+                if self.js and self.js.dispatch_event("click", elt): return
+                self.activate_element(elt)
+                return
             elt = elt.parent 
 
     def keypress(self, char):
-        if self.focus:
-            if self.js.dispatch_event("keydown", self.focus): return
+        if self.focus and getattr(self.focus, 'tag', None) == "input":
+            if "value" not in self.focus.attributes:
+                self.activate_element(self.focus)
+            if self.js and self.js.dispatch_event("keydown", self.focus): return
             self.focus.attributes["value"] += char
             self.set_needs_render()
             self.render()
 
+    # Zoom operations
+    def zoom_by(self, increment):
+        if increment:
+            self.zoom *= 1.1
+            self.scroll *= 1.1
+        else:
+            self.zoom *= 1/1.1
+            self.scroll *= 1/1.1
+        self.set_needs_render()
+
+    def reset_zoom(self):
+        if self.zoom != 1:
+            self.scroll /= self.zoom
+            self.zoom = 1
+            self.set_needs_render()
+
+    # Dark mode operations
+    def set_dark_mode(self, val):
+        self.dark_mode = val
+        self.set_needs_render()
+
+    def focus_element(self, node):
+        if self.focus:
+            self.focus.is_focused = False
+        self.focus = node
+        if node:
+            node.is_focused = True
+            # mark to scroll into view
+            self.needs_focus_scroll = True
+
+    def enter(self):
+        if not self.focus: return
+        if self.js and self.js.dispatch_event("click", self.focus): return
+        self.activate_element(self.focus)
+
+    def activate_element(self, elt):
+        if isinstance(elt, Text):
+            return
+        if elt.tag == "input":
+            elt.attributes["value"] = ""
+            self.set_needs_render()
+        elif elt.tag == "a" and "href" in elt.attributes:
+            url = self.url.resolve(elt.attributes["href"])
+            self.load(url)
+        elif elt.tag == "button":
+            cur = elt
+            while cur:
+                if cur.tag == "form" and "action" in cur.attributes:
+                    self.submit_form(cur)
+                    break
+                cur = cur.parent
+
+    def advance_tab(self):
+        focusable_nodes = [node for node in tree_to_list(self.nodes, [])
+            if isinstance(node, Element) and is_focusable(node)]
+        focusable_nodes.sort(key=get_tabindex)
+        if self.focus in focusable_nodes:
+            idx = focusable_nodes.index(self.focus) + 1
+        else:
+            idx = 0
+        if idx < len(focusable_nodes):
+            self.focus_element(focusable_nodes[idx])
+        else:
+            self.focus_element(None)
+            self.browser.focus_addressbar()
+        self.set_needs_render()
+
+    def scroll_to(self, elt):
+        objs = [obj for obj in tree_to_list(self.document, []) if getattr(obj, 'node', None) == self.focus]
+        if not objs: return
+        obj = objs[0]
+        # If already in view, do nothing
+        if self.scroll < obj.y < self.scroll + self.tab_height:
+            return
+        max_y = max(self.document.height + 2*dpx(VSTEP, self.zoom) - self.tab_height, 0)
+        new_scroll = obj.y - SCROLL_STEP
+        self.scroll = self.clamp_scroll(new_scroll, max_y)
+
+    def clamp_scroll(self, val, max_y=None):
+        if max_y is None:
+            max_y = max(self.document.height + 2*dpx(VSTEP, self.zoom) - self.tab_height, 0)
+        if val < 0:
+            return 0
+        if val > max_y:
+            return max_y
+        return val
+
 def mainloop(browser):
     event = sdl2.SDL_Event()
+    ctrl_down = False
     while True:
         while sdl2.SDL_PollEvent(ctypes.byref(event)) != 0:
             if event.type == sdl2.SDL_QUIT:
@@ -1004,13 +1285,48 @@ def mainloop(browser):
                     browser.handle_scrollup()
                 elif event.button.button == sdl2.SDL_BUTTON_WHEELDOWN:
                     browser.handle_scrolldown()
+            elif event.type == sdl2.SDL_MOUSEMOTION:
+                browser.handle_hover(event.motion)
             elif event.type == sdl2.SDL_KEYDOWN:
+                if ctrl_down:
+                    if event.key.keysym.sym == sdl2.SDLK_EQUALS:
+                        browser.increment_zoom(True)
+                    elif event.key.keysym.sym == sdl2.SDLK_MINUS:
+                        browser.increment_zoom(False)
+                    elif event.key.keysym.sym == sdl2.SDLK_0:
+                        browser.reset_zoom()
+                    elif event.key.keysym.sym == sdl2.SDLK_d:
+                        browser.toggle_dark_mode()
+                    elif event.key.keysym.sym == sdl2.SDLK_a:
+                        browser.toggle_accessibility()
+                    elif event.key.keysym.sym == sdl2.SDLK_LEFT:
+                        browser.go_back()
+                    elif event.key.keysym.sym == sdl2.SDLK_l:
+                        browser.focus_addressbar()
+                    elif event.key.keysym.sym == sdl2.SDLK_t:
+                        browser.new_tab(URL("https://browser.engineering/"))
+                    elif event.key.keysym.sym == sdl2.SDLK_TAB:
+                        browser.cycle_tabs()
+                    elif event.key.keysym.sym == sdl2.SDLK_q:
+                        browser.handle_quit()
+                        sdl2.SDL_Quit()
+                        sys.exit()
+                        break
                 if event.key.keysym.sym == sdl2.SDLK_RETURN:
                     browser.handle_enter()
                 elif event.key.keysym.sym == sdl2.SDLK_DOWN:
                     browser.handle_scrolldown()
                 elif event.key.keysym.sym == sdl2.SDLK_UP:
                     browser.handle_scrollup()
+                elif event.key.keysym.sym == sdl2.SDLK_TAB:
+                    browser.handle_tab()
+                elif event.key.keysym.sym == sdl2.SDLK_RCTRL or \
+                    event.key.keysym.sym == sdl2.SDLK_LCTRL:
+                    ctrl_down = True
+            elif event.type == sdl2.SDL_KEYUP:
+                if event.key.keysym.sym == sdl2.SDLK_RCTRL or \
+                    event.key.keysym.sym == sdl2.SDLK_LCTRL:
+                    ctrl_down = False
             elif event.type == sdl2.SDL_TEXTINPUT:
                 browser.handle_key(event.text.text.decode('utf8'))
         

@@ -2,6 +2,7 @@ from draw import DrawText, linespace
 from font_cache import get_font
 from draw import paint_visual_effects
 import skia
+from utils import dpx
 
 class TextLayout:
     def __init__(self, node, word, parent, previous):
@@ -10,12 +11,17 @@ class TextLayout:
         self.children = []
         self.parent = parent
         self.previous = previous
+        try:
+            self.node.layout_object = self
+        except Exception:
+            pass
 
     def layout(self):
         weight = self.node.style["font-weight"]
         style = self.node.style["font-style"]
         if style == "normal": style = "roman"
-        size = int(float(self.node.style["font-size"][:-2]) * .75)
+        px_size = float(self.node.style["font-size"][:-2])
+        size = dpx(px_size * 0.75, getattr(self.parent, 'zoom', 1))
         self.font = get_font(size, weight, style)
         self.width = self.font.measureText(self.word)
         if self.previous:

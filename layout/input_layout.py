@@ -2,7 +2,8 @@ import skia
 from draw import DrawLine, DrawRect, DrawText, linespace
 from font_cache import get_font
 from htmltree.text import Text
-from draw import paint_visual_effects
+from draw import paint_visual_effects, paint_outline
+from utils import dpx
 
 INPUT_WIDTH_PX = 200
 
@@ -14,12 +15,14 @@ class InputLayout:
         self.previous = previous
 
     def layout(self):
+        self.zoom = getattr(self.parent, 'zoom', 1)
         weight = self.node.style["font-weight"]
         style = self.node.style["font-style"]
         if style == "normal": style = "roman"
-        size = int(float(self.node.style["font-size"][:-2]) * .75)
+        px_size = float(self.node.style["font-size"][:-2])
+        size = dpx(px_size * 0.75, getattr(self.parent, 'zoom', 1))
         self.font = get_font(size, weight, style)
-        self.width = INPUT_WIDTH_PX
+        self.width = dpx(INPUT_WIDTH_PX, getattr(self.parent, 'zoom', 1))
         if self.previous:
             space = self.previous.font.measureText(" ")
             self.x = self.previous.x + space + self.previous.width
@@ -45,7 +48,7 @@ class InputLayout:
         color = self.node.style["color"]
         cmds.append(DrawText(self.x, self.y, text, self.font, color))
 
-        if self.node.is_focused:
+        if getattr(self.node, 'is_focused', False) and self.node.tag == "input":
             cx = self.x + self.font.measureText(text)
             cmds.append(DrawLine(
                 cx, self.y, cx, self.y + self.height, "black", 1))
@@ -64,4 +67,5 @@ class InputLayout:
     def paint_effects(self, cmds):
         cmds = paint_visual_effects(
             self.node, cmds, self.self_rect())
+        paint_outline(self.node, cmds, self.self_rect(), getattr(self, 'zoom', 1))
         return cmds

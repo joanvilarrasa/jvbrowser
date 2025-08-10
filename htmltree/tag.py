@@ -4,7 +4,12 @@ class Element:
         self.attributes = attributes
         self.children = []
         self.parent = parent
+        self.style = {}
         self.is_focused = False
+        self.layout_object = None
 
     def __repr__(self):
-        return "<" + self.tag + ">"
+        if self.tag == "input":
+            return ("<" + self.tag + ">")
+        else:
+            return ("<" + self.tag + ">")
