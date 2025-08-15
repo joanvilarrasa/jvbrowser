@@ -8,18 +8,6 @@ class LineLayout:
         self.parent = parent
         self.previous = previous
         self.children = []
-<<<<<<< HEAD
-        try:
-            self.node.layout_object = self
-        except Exception:
-            pass
-
-    def layout(self):
-        self.zoom = getattr(self.parent, 'zoom', 1)
-        self.width = self.parent.width
-        self.x = self.parent.x
-
-=======
         self.has_dirty_descendants = False
         self.initialized_fields = False
         
@@ -43,7 +31,6 @@ class LineLayout:
         self.width.copy(self.parent.width)
         self.x.copy(self.parent.x)
         self.zoom.copy(self.parent.zoom)
->>>>>>> 3e07826 (Done with the project, pretty good book)
         if self.previous:
             prev_y = self.previous.y.read(notify=self.y)
             prev_height = self.previous.height.read(notify=self.y)

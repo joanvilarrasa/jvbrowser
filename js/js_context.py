@@ -26,15 +26,10 @@ class JSContext:
         self.interp.export_function("style_set", self.style_set)
         self.interp.export_function("setTimeout",self.setTimeout)
         self.interp.export_function("requestAnimationFrame", self.requestAnimationFrame)
-<<<<<<< HEAD
-        self.interp.export_function("setAttribute", self.setAttribute)
-        self.interp.evaljs(RUNTIME_JS)
-=======
         self.interp.export_function("postMessage", self.postMessage)
         self.interp.export_function("parent", self.parent)
         self.interp.evaljs("WINDOWS = {}")
         self.interp.evaljs("function Window(id) { this._id = id };")
->>>>>>> 3e07826 (Done with the project, pretty good book)
         self.node_to_handle = {}
         self.handle_to_node = {}
         self.discarded = False

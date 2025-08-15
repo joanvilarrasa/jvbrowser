@@ -80,17 +80,11 @@ class BlockLayout:
         self.height = ProtectedField(self, "height", self.parent)
 
     def layout(self):
-<<<<<<< HEAD
-        self.zoom = getattr(self.parent, 'zoom', 1)
-        self.x = self.parent.x
-        self.width = self.parent.width
-=======
         if not self.layout_needed(): return
         
         self.x.copy(self.parent.x)
         self.width.copy(self.parent.width)
         self.zoom.copy(self.parent.zoom)
->>>>>>> 3e07826 (Done with the project, pretty good book)
         if self.previous:
             prev_y = self.previous.y.read(notify=self.y)
             prev_height = self.previous.height.read(notify=self.y)

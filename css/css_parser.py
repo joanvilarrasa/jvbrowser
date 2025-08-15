@@ -214,7 +214,6 @@ def init_style(node):
         ])
 
 def style(node, rules, tab=None):
-<<<<<<< HEAD
     node.style = {}
     # Inhetited properties
     for property, default_value in INHERITED_PROPERTIES.items():
@@ -243,18 +242,6 @@ def style(node, rules, tab=None):
         for property, value in pairs.items():
             node.style[property] = value
 
-=======
-    if not node.style:
-        init_style(node)
-    
-    needs_style = any([field.dirty for field in node.style.values()])
-    if needs_style:
-        old_style = dict([
-            (property, field.value)
-            for property, field in node.style.items()
-        ])
-        new_style = CSS_PROPERTIES.copy()
->>>>>>> 3e07826 (Done with the project, pretty good book)
         
         # Inhetited properties
         for property, default_value in INHERITED_PROPERTIES.items():

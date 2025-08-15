@@ -8,11 +8,7 @@ class Element:
         self.parent = parent
         self.style = {}
         self.is_focused = False
-<<<<<<< HEAD
         self.layout_object = None
-=======
-        self.style = None
->>>>>>> 3e07826 (Done with the project, pretty good book)
 
     def __repr__(self):
         if self.tag == "input":

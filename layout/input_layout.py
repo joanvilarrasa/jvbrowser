@@ -18,22 +18,6 @@ class InputLayout(EmbedLayout):
         super().__init__(node, parent, previous, None)
 
     def layout(self):
-<<<<<<< HEAD
-        self.zoom = getattr(self.parent, 'zoom', 1)
-        weight = self.node.style["font-weight"]
-        style = self.node.style["font-style"]
-        if style == "normal": style = "roman"
-        px_size = float(self.node.style["font-size"][:-2])
-        size = dpx(px_size * 0.75, getattr(self.parent, 'zoom', 1))
-        self.font = get_font(size, weight, style)
-        self.width = dpx(INPUT_WIDTH_PX, getattr(self.parent, 'zoom', 1))
-        if self.previous:
-            space = self.previous.font.measureText(" ")
-            self.x = self.previous.x + space + self.previous.width
-        else:
-            self.x = self.parent.x
-        self.height = linespace(self.font) 
-=======
         super().layout()
         zoom = self.zoom.read(notify=self.width)
         self.width.set(dpx(INPUT_WIDTH_PX, zoom))
@@ -44,7 +28,6 @@ class InputLayout(EmbedLayout):
         height = self.height.read(notify=self.ascent)
         self.ascent.set(-height)
         self.descent.set(0) 
->>>>>>> 3e07826 (Done with the project, pretty good book)
 
     def paint(self):
         cmds = []
@@ -64,32 +47,8 @@ class InputLayout(EmbedLayout):
         color = self.node.style["color"].get()
         cmds.append(DrawText(self.x.get(), self.y.get(), text, self.font.get(), color))
 
-<<<<<<< HEAD
-        if getattr(self.node, 'is_focused', False) and self.node.tag == "input":
-            cx = self.x + self.font.measureText(text)
-            cmds.append(DrawLine(
-                cx, self.y, cx, self.y + self.height, "black", 1))
-
-        return cmds
-
-    def should_paint(self):
-        return True
-
-    def self_rect(self):
-        return skia.Rect.MakeLTRB(
-            self.x, self.y,
-            self.x + self.width,
-            self.y + self.height)
-
-    def paint_effects(self, cmds):
-        cmds = paint_visual_effects(
-            self.node, cmds, self.self_rect())
-        paint_outline(self.node, cmds, self.self_rect(), getattr(self, 'zoom', 1))
-        return cmds
-=======
         if self.node.is_focused and self.node.tag == "input":
             cmds.append(DrawCursor(self, self.font.get().measureText(text)))
 
         return cmds
 
->>>>>>> 3e07826 (Done with the project, pretty good book)

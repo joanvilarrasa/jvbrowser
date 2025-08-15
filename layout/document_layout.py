@@ -1,11 +1,7 @@
 import skia
 from layout.block_layout import HSTEP, VSTEP, WIDTH, BlockLayout
 from draw import paint_visual_effects
-<<<<<<< HEAD
-from utils import dpx
-=======
 from protected_field import ProtectedField
->>>>>>> 3e07826 (Done with the project, pretty good book)
 
 
 class DocumentLayout:
@@ -27,16 +23,6 @@ class DocumentLayout:
         self.width_val = None
         self.height_val = None
 
-<<<<<<< HEAD
-    def layout(self, zoom):
-        self.zoom = zoom
-        child = BlockLayout(self.node, self, None)
-        self.children.append(child)
-        # WIDTH is device pixels; HSTEP/VSTEP are CSS pixels
-        self.width = WIDTH - 2 * dpx(HSTEP, self.zoom)
-        self.x = dpx(HSTEP, self.zoom)
-        self.y = dpx(VSTEP, self.zoom)
-=======
     def layout(self, width, zoom):
         if not self.layout_needed(): return
         
@@ -51,7 +37,6 @@ class DocumentLayout:
         self.y.set(dpx(VSTEP, zoom))
         self.zoom.set(zoom)
         child.zoom.mark()
->>>>>>> 3e07826 (Done with the project, pretty good book)
         child.layout()
         self.height.copy(child.height)
         self.has_dirty_descendants = False

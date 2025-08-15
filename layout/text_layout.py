@@ -2,12 +2,8 @@ from draw import DrawText, linespace
 from font_cache import get_font
 from draw import paint_visual_effects
 import skia
-<<<<<<< HEAD
-from utils import dpx
-=======
 from protected_field import ProtectedField
 from layout.embed_layout import font
->>>>>>> 3e07826 (Done with the project, pretty good book)
 
 class TextLayout:
     def __init__(self, node, word, parent, previous):
@@ -16,21 +12,6 @@ class TextLayout:
         self.children = []
         self.parent = parent
         self.previous = previous
-<<<<<<< HEAD
-        try:
-            self.node.layout_object = self
-        except Exception:
-            pass
-
-    def layout(self):
-        weight = self.node.style["font-weight"]
-        style = self.node.style["font-style"]
-        if style == "normal": style = "roman"
-        px_size = float(self.node.style["font-size"][:-2])
-        size = dpx(px_size * 0.75, getattr(self.parent, 'zoom', 1))
-        self.font = get_font(size, weight, style)
-        self.width = self.font.measureText(self.word)
-=======
         self.has_dirty_descendants = False
         
         self.zoom = ProtectedField(self, "zoom", self.parent, [self.parent.zoom])
@@ -70,7 +51,6 @@ class TextLayout:
         f = self.font.read(notify=self.height)
         self.height.set(linespace(f) * 1.25)
 
->>>>>>> 3e07826 (Done with the project, pretty good book)
         if self.previous:
             prev_x = self.previous.x.read(notify=self.x)
             prev_font = self.previous.font.read(notify=self.x)
