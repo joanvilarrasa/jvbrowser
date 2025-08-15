@@ -23,10 +23,12 @@ from font_cache import get_font
 from htmltree.htmlparser import HTMLParser
 from htmltree.tag import Element
 from htmltree.text import Text
+from accessibility import AccessibilityNode
 from js.js_context import JSContext
 from layout.block_layout import HEIGHT, VSTEP, WIDTH
 from layout.document_layout import DocumentLayout
 from task import Task, TaskRunner
+<<<<<<< HEAD
 from utils import tree_to_list, dpx
 from accessibility import AccessibilityNode
 
@@ -43,12 +45,32 @@ def speak_text(text):
         os.remove(SPEECH_FILE)
     except Exception:
         pass
+=======
+from utils import tree_to_list
+from frame import Frame
+>>>>>>> 3e07826 (Done with the project, pretty good book)
 
 SCROLL_STEP = 100
 DEFAULT_STYLE_SHEET = CSSParser(open("css/default.css").read()).parse()
 REFRESH_RATE_SEC = .033
 COOKIE_JAR = {}
 MAX_REDIRECTS = 10
+
+# Create a simple broken image placeholder
+BROKEN_IMAGE = None
+try:
+    BROKEN_IMAGE = skia.Image.open("Broken_Image.png")
+except:
+    # Create a simple broken image if file doesn't exist
+    surface = skia.Surface(100, 100)
+    canvas = surface.getCanvas()
+    canvas.clear(skia.ColorWHITE)
+    paint = skia.Paint(Color=skia.ColorGRAY)
+    canvas.drawRect(skia.Rect.MakeLTRB(0, 0, 100, 100), paint)
+    paint = skia.Paint(Color=skia.ColorRED, StrokeWidth=3, Style=skia.Paint.kStroke_Style)
+    canvas.drawLine(20, 20, 80, 80, paint)
+    canvas.drawLine(80, 20, 20, 80, paint)
+    BROKEN_IMAGE = surface.makeImageSnapshot()
 
 class MeasureTime:
     def __init__(self):
@@ -92,6 +114,10 @@ class Browser:
         self.tabs = []
         self.active_tab = None
         self.chrome = Chrome(self, URL)
+        self.url = None
+        self.scroll = 0
+        self.display_list = []
+        self.focus = None
         self.animation_timer = None
         # Dirty bits for pipeline
         self.needs_composite = False
@@ -102,6 +128,7 @@ class Browser:
         self.composited_layers = []
         self.draw_list = []
         self.composited_updates = {}
+<<<<<<< HEAD
         # Accessibility state
         self.needs_accessibility = False
         self.accessibility_is_on = False
@@ -116,6 +143,12 @@ class Browser:
         self.active_alerts = []
         self.spoken_alerts = []
         
+=======
+        self.root_frame_focused = True
+        self.accessibility_tree = None
+        self.lock = threading.Lock()
+
+>>>>>>> 3e07826 (Done with the project, pretty good book)
         if sdl2.SDL_BYTEORDER == sdl2.SDL_BIG_ENDIAN:
             self.RED_MASK = 0xff000000
             self.GREEN_MASK = 0x00ff0000
@@ -245,12 +278,20 @@ class Browser:
 
     # Event handlers
     def handle_scrolldown(self):
-        self.active_tab.scrolldown()
-        self.set_needs_raster()
+        if self.root_frame_focused:
+            self.active_tab.scrolldown()
+            self.set_needs_raster()
+        else:
+            task = Task(self.active_tab.scrolldown)
+            self.active_tab.task_runner.schedule_task(task)
 
     def handle_scrollup(self):
-        self.active_tab.scrollup()
-        self.set_needs_raster()
+        if self.root_frame_focused:
+            self.active_tab.scrollup()
+            self.set_needs_raster()
+        else:
+            task = Task(self.active_tab.scrollup)
+            self.active_tab.task_runner.schedule_task(task)
 
     def handle_click(self, e):
         if e.y < self.chrome.bottom:
@@ -326,11 +367,29 @@ class Browser:
         if tab == self.active_tab:
             self.needs_animation_frame = True
 
+    def commit(self, tab, data):
+        self.lock.acquire(blocking=True)
+        self.active_tab = tab
+        self.url = data.url
+        self.scroll = data.scroll
+        self.root_frame_focused = data.root_frame_focused
+        self.display_list = data.display_list
+        self.composited_updates = data.composited_updates
+        self.accessibility_tree = data.accessibility_tree
+        self.focus = data.focus
+        self.lock.release()
+
     def raster_tab(self):
         if self.use_gpu:
             # Raster all composited layers (no painting to root yet)
             for layer in self.composited_layers:
                 layer.raster()
+        else:
+            # CPU raster path
+            canvas = self.tab_surface.getCanvas()
+            canvas.clear(skia.ColorWHITE)
+            for cmd in self.display_list:
+                cmd.execute(canvas)
 
     def raster_chrome(self):
         canvas = self.chrome_surface.getCanvas()
@@ -350,7 +409,7 @@ class Browser:
             canvas.clear(skia.ColorWHITE)
 
         tab_rect = skia.Rect.MakeLTRB(0, self.chrome.bottom, WIDTH, HEIGHT)
-        tab_offset = self.chrome.bottom - self.active_tab.scroll
+        tab_offset = self.chrome.bottom - self.scroll
         canvas.save()
         canvas.clipRect(tab_rect)
         canvas.translate(0, tab_offset)
@@ -385,7 +444,7 @@ class Browser:
     def composite(self):
         # Walk display list, gather paint commands
         all_commands = []
-        for cmd in self.active_tab.display_list:
+        for cmd in self.display_list:
             all_commands = tree_to_list(cmd, all_commands)
         paint_commands = [cmd for cmd in all_commands if isinstance(cmd, PaintCommand)]
 
@@ -575,7 +634,7 @@ class URL:
             self.url = "about:blank"
             self.is_valid_url = False
     
-    def request(self, referrer, payload=None):
+    def request(self, referrer, payload=None, binary=False):
         if not self.is_valid_url:
             return ""
         
@@ -615,7 +674,7 @@ class URL:
         s.send(request.encode("utf8"))
         
         # Read the response from the server
-        response = s.makefile("rb")
+        response = s.makefile("b")
         version, status, explanation, response_headers = self.get_response_metadata(response)
 
         if "set-cookie" in response_headers:
@@ -638,7 +697,10 @@ class URL:
             return content
 
         # Get the content of the response
-        content = self.get_response_content(response, response_headers)
+        if binary:
+            content = self.get_response_content_binary(response, response_headers)
+        else:
+            content = self.get_response_content(response, response_headers)
 
         s.close()
         return response_headers, content
@@ -688,6 +750,30 @@ class URL:
             content = gzip.decompress(raw_content).decode("utf8")
         else:
             content = raw_content.decode("utf8")
+        
+        return content
+
+    def get_response_content_binary(self, response, response_headers):
+        # Handle transfer-encoding first
+        if "transfer-encoding" in response_headers:
+            transfer_encoding = response_headers["transfer-encoding"]
+            if transfer_encoding == "chunked":
+                raw_content = self.read_chunked_content(response)
+            else:
+                raise ValueError(f"Unsupported transfer encoding: {transfer_encoding}")
+        elif "content-length" in response_headers:
+            content_length = int(response_headers["content-length"])
+            raw_content = response.read(content_length)
+        else:
+            print("No content length")
+            raw_content = response.read()
+        
+        # Handle content-encoding after getting the raw content
+        if "content-encoding" in response_headers:
+            assert response_headers["content-encoding"] == "gzip"
+            content = gzip.decompress(raw_content)
+        else:
+            content = raw_content
         
         return content
 
@@ -909,9 +995,23 @@ class Chrome:
     def blur(self):
         self.focus = None
 
+<<<<<<< HEAD
     def focus_addressbar(self):
         self.focus = "address bar"
         self.address_bar = ""
+=======
+class CommitData:
+    def __init__(self, url, scroll, root_frame_focused, height,
+        display_list, composited_updates, accessibility_tree, focus):
+        self.url = url
+        self.scroll = scroll
+        self.root_frame_focused = root_frame_focused
+        self.height = height
+        self.display_list = display_list
+        self.composited_updates = composited_updates
+        self.accessibility_tree = accessibility_tree
+        self.focus = focus
+>>>>>>> 3e07826 (Done with the project, pretty good book)
 
 class Tab:
     def __init__(self, browser, tab_height):
@@ -919,17 +1019,14 @@ class Tab:
         self.browser = browser
         self.task_runner = TaskRunner(self)
         self.tab_height = tab_height
-        self.url = None
-        self.document = DocumentLayout(None)
-        self.nodes = []
-        self.rules = DEFAULT_STYLE_SHEET.copy()
-        self.display_list = []
-        self.scroll = 0
         self.history = []
+        self.root_frame = None
+        self.window_id_to_frame = {}
         self.focus = None
-        self.needs_style = False
-        self.needs_layout = False
+        self.focused_frame = None
+        self.needs_accessibility = False
         self.needs_paint = False
+<<<<<<< HEAD
         self.browser = browser
         self.js = None
         self.composited_updates = []
@@ -938,19 +1035,30 @@ class Tab:
         self.needs_focus_scroll = False
         # Accessibility state
         self.accessibility_tree = None
+=======
+        self.display_list = []
+        self.origin_to_js = {}
+        self.accessibility_tree = None
+        self.zoom = 1.0
+>>>>>>> 3e07826 (Done with the project, pretty good book)
 
     def set_needs_render(self):
-        self.needs_style = True
-        self.browser.set_needs_animation_frame(self)
+        if self.root_frame:
+            self.root_frame.set_needs_render()
 
     def set_needs_layout(self):
-        self.needs_layout = True
-        self.browser.set_needs_animation_frame(self)
+        if self.root_frame:
+            self.root_frame.set_needs_layout()
 
     def set_needs_paint(self):
-        self.needs_paint = True
+        if self.root_frame:
+            self.root_frame.set_needs_paint()
+
+    def set_needs_accessibility(self):
+        self.needs_accessibility = True
         self.browser.set_needs_animation_frame(self)
 
+<<<<<<< HEAD
     def load(self, url, payload=None):
         self.focus = None
         self.zoom = 1
@@ -961,62 +1069,54 @@ class Tab:
         self.rules = DEFAULT_STYLE_SHEET.copy()
         if self.js: self.js.discarded = True
         self.js = JSContext(self)
+=======
+    def set_needs_render_all_frames(self):
+        for id, frame in self.window_id_to_frame.items():
+            frame.set_needs_render()
+>>>>>>> 3e07826 (Done with the project, pretty good book)
 
-        self.allowed_origins = None
-        if "content-security-policy" in headers:
-            csp = headers["content-security-policy"].split()
-            if len(csp) > 0 and csp[0] == "default-src":
-                self.allowed_origins = []
-                for origin in csp[1:]:
-                    self.allowed_origins.append(URL(origin).origin())
+    def get_js(self, url):
+        origin = url.origin()
+        if origin not in self.origin_to_js:
+            self.origin_to_js[origin] = JSContext(self, origin)
+        return self.origin_to_js[origin]
 
-        # Get all the scripts and execute them in order
-        scripts = [node.attributes["src"] for node
-                   in tree_to_list(self.nodes, [])
-                   if isinstance(node, Element)
-                   and node.tag == "script"
-                   and "src" in node.attributes]
-        for script in scripts:
-            script_url = url.resolve(script)
-            if not self.allowed_request(script_url):
-                print("Blocked script", script, "due to CSP")
-                continue
-            try:
-                header, body = script_url.request(url)
-            except:
-                continue
-            task = Task(self.js.run, script_url, body)
-            self.task_runner.schedule_task(task)
-
-        # Get all the stylesheets and add them to the rules in order
-        links = [node.attributes["href"] for node in tree_to_list(self.nodes, [])
-            if isinstance(node, Element)
-            and node.tag == "link"
-            and node.attributes.get("rel") == "stylesheet"
-            and "href" in node.attributes]
-        for link in links:
-            style_url = url.resolve(link)
-            if not self.allowed_request(style_url):
-                print("Blocked stylesheet", link, "due to CSP")
-                continue
-            try:
-                headers, body = style_url.request(url)
-            except:
-                continue
-            self.rules.extend(CSSParser(body).parse())
+    def zoom_by(self, increment):
+        self.zoom = max(0.1, min(5.0, self.zoom + increment))
+        for id, frame in self.window_id_to_frame.items():
+            frame.document.zoom.mark()
         self.set_needs_render()
-        self.render()
+
+    def reset_zoom(self):
+        self.zoom = 1.0
+        for id, frame in self.window_id_to_frame.items():
+            frame.document.zoom.mark()
+        self.set_needs_render()
+
+    def post_message(self, message, target_window_id):
+        frame = self.window_id_to_frame[target_window_id]
+        frame.js.dispatch_post_message(message, target_window_id)
+
+    def load(self, url, payload=None):
+        self.history.append(url)
+        self.root_frame = Frame(self, None, None)
+        self.root_frame.frame_width = WIDTH
+        self.root_frame.frame_height = self.tab_height
+        self.root_frame.load(url, payload)
 
     def allowed_request(self, url):
-        return self.allowed_origins == None or url.origin() in self.allowed_origins
-    
+        if self.root_frame:
+            return self.root_frame.allowed_request(url)
+        return True
+
     def render(self):
         self.browser.measure.time('render')
 
-        style_ran = False
-        layout_ran = False
-        paint_ran = False
+        for id, frame in self.window_id_to_frame.items():
+            if frame.loaded:
+                frame.render()
 
+<<<<<<< HEAD
         if self.needs_style:
             # Adjust default color based on dark mode
             if self.dark_mode:
@@ -1035,6 +1135,11 @@ class Tab:
             self.needs_paint = True
             self.needs_layout = False
             layout_ran = True
+=======
+        if self.needs_accessibility:
+            self.accessibility_tree = AccessibilityNode(self.root_frame.nodes)
+            self.needs_accessibility = False
+>>>>>>> 3e07826 (Done with the project, pretty good book)
 
         if self.needs_accessibility:
             self.accessibility_tree = AccessibilityNode(self.nodes)
@@ -1043,54 +1148,73 @@ class Tab:
 
         if self.needs_paint:
             self.display_list = []
-            paint_tree(self.document, self.display_list)
+            paint_tree(self.root_frame.document, self.display_list)
             self.needs_paint = False
-            paint_ran = True
-
-        # After render steps complete, set appropriate browser flags
-        if style_ran:
-            self.browser.set_needs_composite()
-        elif layout_ran:
-            self.browser.set_needs_raster()
-        elif paint_ran:
-            self.browser.set_needs_draw()
 
         self.browser.measure.stop('render')
 
-    def run_animation_frame(self):
+    def run_animation_frame(self, scroll):
         # Run RAF handlers first
-        if self.js and not self.js.discarded:
-            self.browser.measure.time('evaljs __runRAFHandlers')
-            self.js.interp.evaljs("__runRAFHandlers()")
-            self.browser.measure.stop('evaljs __runRAFHandlers')
+        for (window_id, frame) in self.window_id_to_frame.items():
+            if not frame.loaded:
+                continue
+            frame.js.dispatch_RAF(frame.window_id)
 
         # Drive CSS transitions: update active animations and request layout-only
         updated = False
-        for node in tree_to_list(self.nodes, []):
-            animations = getattr(node, 'animations', {})
-            for (prop, animation) in list(animations.items()):
-                value = animation.animate()
-                if value is not None:
-                    node.style[prop] = value
-                    updated = True
-                    self.composited_updates.append(node)
-                else:
-                    # Animation finished
-                    del animations[prop]
+        for (window_id, frame) in self.window_id_to_frame.items():
+            if not frame.loaded:
+                continue
+            for node in tree_to_list(frame.nodes, []):
+                animations = getattr(node, 'animations', {})
+                for (prop, animation) in list(animations.items()):
+                    value = animation.animate()
+                    if value is not None:
+                        node.style[prop].set(value)
+                        updated = True
+                        frame.composited_updates.append(node)
+                    else:
+                        # Animation finished
+                        del animations[prop]
+        
         # If we updated only composited properties (like opacity), avoid layout
-        needs_composite = self.needs_style or self.needs_layout
+        needs_composite = any(frame.needs_style or frame.needs_layout 
+                             for frame in self.window_id_to_frame.values() if frame.loaded)
         if updated:
             self.set_needs_paint()
-        self.render()
+        
+        for id, frame in self.window_id_to_frame.items():
+            if frame.loaded:
+                frame.render()
+        
         if updated and not needs_composite:
             # Provide updated effects to the browser to skip composite/raster
             updates = {}
-            for node in self.composited_updates:
-                if hasattr(node, 'blend_op'):
-                    updates[node] = node.blend_op
+            for frame in self.window_id_to_frame.values():
+                if frame.loaded:
+                    for node in frame.composited_updates:
+                        if hasattr(node, 'blend_op'):
+                            updates[node] = node.blend_op
             self.browser.composited_updates = updates
-            self.composited_updates = []
+            for frame in self.window_id_to_frame.values():
+                if frame.loaded:
+                    frame.composited_updates = []
             self.browser.set_needs_draw()
+        
+        # Create commit data for browser thread
+        root_frame_focused = not self.focused_frame or \
+                self.focused_frame == self.root_frame
+        commit_data = CommitData(
+            self.root_frame.url if self.root_frame else None,
+            self.root_frame.scroll if self.root_frame else 0,
+            root_frame_focused,
+            self.tab_height,
+            self.display_list,
+            self.browser.composited_updates,
+            self.accessibility_tree,
+            self.focus
+        )
+        self.browser.commit(self, commit_data)
 
         if getattr(self, 'needs_focus_scroll', False) and self.focus:
             self.scroll_to(self.focus)
@@ -1109,34 +1233,24 @@ class Tab:
             cmd.execute(canvas)
 
     def submit_form(self, elt):
-        # Dispatch the submit event to the js runtime
-        if self.js.dispatch_event("submit", elt): return
-        # Find all the input elements of the form
-        inputs = [node for node in tree_to_list(elt, [])
-                  if isinstance(node, Element)
-                  and node.tag == "input"
-                  and "name" in node.attributes]
-        
-        # Encode the form data for the http request
-        body = ""
-        for input in inputs:
-            name = input.attributes["name"]
-            value = input.attributes.get("value", "")
-            name = urllib.parse.quote(name)
-            value = urllib.parse.quote(value)
-            body += "&" + name + "=" + value
-        body = body[1:]
-        url = self.url.resolve(elt.attributes["action"])
-        self.load(url, body)
+        if self.root_frame:
+            self.root_frame.submit_form(elt)
 
     # Event handlers
     def scrolldown(self):
+<<<<<<< HEAD
         max_y = max(self.document.height + 2*dpx(VSTEP, self.zoom) - self.tab_height, 0)
         self.scroll = min(self.scroll + SCROLL_STEP, max_y)
+=======
+        frame = self.focused_frame or self.root_frame
+        frame.scrolldown()
+        self.set_needs_paint()
+>>>>>>> 3e07826 (Done with the project, pretty good book)
 
     def scrollup(self):
-        if self.scroll > 0:
-            self.scroll -= SCROLL_STEP
+        frame = self.focused_frame or self.root_frame
+        frame.scrollup()
+        self.set_needs_paint()
 
     def go_back(self):
         if len(self.history) > 1:
@@ -1146,6 +1260,7 @@ class Tab:
 
     def click(self, x, y): 
         self.render()
+<<<<<<< HEAD
         if self.focus:
             self.focus.is_focused = False
         self.focus = None
@@ -1181,6 +1296,17 @@ class Tab:
             self.focus.attributes["value"] += char
             self.set_needs_render()
             self.render()
+=======
+        self.root_frame.click(x, y)
+
+    def keypress(self, char):
+        frame = self.focused_frame or self.root_frame
+        frame.keypress(char)
+
+    def advance_tab(self):
+        frame = self.focused_frame or self.root_frame
+        frame.advance_tab()
+>>>>>>> 3e07826 (Done with the project, pretty good book)
 
     # Zoom operations
     def zoom_by(self, increment):

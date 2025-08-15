@@ -1,5 +1,6 @@
 from draw import linespace, paint_visual_effects, paint_outline
 import skia
+from protected_field import ProtectedField
 
 class LineLayout:
     def __init__(self, node, parent, previous):
@@ -7,6 +8,7 @@ class LineLayout:
         self.parent = parent
         self.previous = previous
         self.children = []
+<<<<<<< HEAD
         try:
             self.node.layout_object = self
         except Exception:
@@ -17,24 +19,82 @@ class LineLayout:
         self.width = self.parent.width
         self.x = self.parent.x
 
+=======
+        self.has_dirty_descendants = False
+        self.initialized_fields = False
+        
+        self.zoom = ProtectedField(self, "zoom", self.parent, [self.parent.zoom])
+        self.width = ProtectedField(self, "width", self.parent, [self.parent.width])
+        self.x = ProtectedField(self, "x", self.parent, [self.parent.x])
+        
         if self.previous:
-            self.y = self.previous.y + self.previous.height
+            y_dependencies = [self.previous.y, self.previous.height]
         else:
-            self.y = self.parent.y
+            y_dependencies = [self.parent.y]
+        self.y = ProtectedField(self, "y", self.parent, y_dependencies)
+        
+        self.height = ProtectedField(self, "height", self.parent)
+        self.ascent = ProtectedField(self, "ascent", self.parent)
+        self.descent = ProtectedField(self, "descent", self.parent)
+
+    def layout(self):
+        if not self.layout_needed(): return
+        
+        self.width.copy(self.parent.width)
+        self.x.copy(self.parent.x)
+        self.zoom.copy(self.parent.zoom)
+>>>>>>> 3e07826 (Done with the project, pretty good book)
+        if self.previous:
+            prev_y = self.previous.y.read(notify=self.y)
+            prev_height = self.previous.height.read(notify=self.y)
+            self.y.set(prev_y + prev_height)
+        else:
+            self.y.copy(self.parent.y)
 
         # Layout the words in the line so that we have information about their font, width, and height
         for word in self.children:
             word.layout()
-        max_ascent = min([word.font.getMetrics().fAscent for word in self.children])
-        baseline = self.y + 1.25 * max_ascent
+        
+        if not self.initialized_fields:
+            self.ascent.set_dependencies([child.ascent for child in self.children])
+            self.descent.set_dependencies([child.descent for child in self.children])
+            self.initialized_fields = True
+        
+        if not self.children:
+            self.height.set(0)
+            return
 
-        # Set the y position of each word depending on the other words in the same line
-        for word in self.children:
-            word.y = baseline - word.font.getMetrics().fAscent
+        self.ascent.set(max([
+            -child.ascent.read(notify=self.ascent)
+            for child in self.children
+        ]))
 
-        max_descent = max([word.font.getMetrics().fDescent for word in self.children])
+        self.descent.set(max([
+            child.descent.read(notify=self.descent)
+            for child in self.children
+        ]))
 
-        self.height = max_descent - max_ascent
+        for child in self.children:
+            new_y = self.y.read(notify=child.y)
+            new_y += self.ascent.read(notify=child.y)
+            new_y += child.ascent.read(notify=child.y)
+            child.y.set(new_y)
+
+        max_ascent = self.ascent.read(notify=self.height)
+        max_descent = self.descent.read(notify=self.height)
+        self.height.set(max_ascent + max_descent)
+        self.has_dirty_descendants = False
+
+    def layout_needed(self):
+        if self.zoom.dirty: return True
+        if self.width.dirty: return True
+        if self.height.dirty: return True
+        if self.x.dirty: return True
+        if self.y.dirty: return True
+        if self.ascent.dirty: return True
+        if self.descent.dirty: return True
+        if self.has_dirty_descendants: return True
+        return False
 
     def paint(self):
         return []
@@ -44,9 +104,9 @@ class LineLayout:
 
     def self_rect(self):
         return skia.Rect.MakeLTRB(
-            self.x, self.y,
-            self.x + self.width,
-            self.y + self.height)
+            self.x.get(), self.y.get(),
+            self.x.get() + self.width.get(),
+            self.y.get() + self.height.get())
 
     def paint_effects(self, cmds):
         cmds = paint_visual_effects(

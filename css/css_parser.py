@@ -11,6 +11,16 @@ INHERITED_PROPERTIES = {
     "color": "black",
 }
 
+CSS_PROPERTIES = {
+    "font-size": "inherit", "font-weight": "inherit",
+    "font-style": "inherit", "color": "inherit",
+    "opacity": "1.0", "transition": "",
+    "transform": "none", "mix-blend-mode": None,
+    "border-radius": "0px", "overflow": "visible",
+    "outline": "none", "background-color": "transparent",
+    "image-rendering": "auto",
+}
+
 
 class CSSParser:
     def __init__(self, s):
@@ -193,7 +203,18 @@ class NumericAnimation:
         current_value = self.old_value + self.change_per_frame * self.frame_count
         return str(current_value)
 
+def init_style(node):
+    node.style = dict([
+            (property, ProtectedField(node, property, None,
+                [node.parent.style[property]] \
+                    if node.parent and \
+                        property in INHERITED_PROPERTIES \
+                    else []))
+            for property in CSS_PROPERTIES
+        ])
+
 def style(node, rules, tab=None):
+<<<<<<< HEAD
     node.style = {}
     # Inhetited properties
     for property, default_value in INHERITED_PROPERTIES.items():
@@ -222,39 +243,81 @@ def style(node, rules, tab=None):
         for property, value in pairs.items():
             node.style[property] = value
 
+=======
+    if not node.style:
+        init_style(node)
+    
+    needs_style = any([field.dirty for field in node.style.values()])
+    if needs_style:
+        old_style = dict([
+            (property, field.value)
+            for property, field in node.style.items()
+        ])
+        new_style = CSS_PROPERTIES.copy()
+>>>>>>> 3e07826 (Done with the project, pretty good book)
         
-    # Handle percentage font-size
-    if node.style["font-size"].endswith("%"):
-        if node.parent:
-            parent_font_size = node.parent.style["font-size"]
-        else:
-            parent_font_size = INHERITED_PROPERTIES["font-size"]
-        node_pct = float(node.style["font-size"][:-1]) / 100
-        parent_px = float(parent_font_size[:-2])
-        node.style["font-size"] = str(node_pct * parent_px) + "px"
+        # Inhetited properties
+        for property, default_value in INHERITED_PROPERTIES.items():
+            if node.parent:
+                parent_field = node.parent.style[property]
+                parent_value = parent_field.read(notify=node.style[property])
+                new_style[property] = parent_value
+            else:
+                new_style[property] = default_value
 
-    # CSS transitions
-    if not hasattr(node, 'animations'):
-        try:
-            # Attach animations dict lazily; callers may not be Element/Text
-            node.animations = {}
-        except Exception:
-            pass
+        # Properties from rules (the stylesheet)
+        for selector, body in rules:
+            if not selector.matches(node): continue
+            for property, value in body.items():
+                new_style[property] = value
 
-    if 'style' in dir(node) and isinstance(node, Element):
-        old_style = getattr(node, 'old_style', None)
-        if old_style:
-            transitions = diff_styles(old_style, node.style)
-            for property, (old_value, new_value, num_frames) in transitions.items():
-                if property == 'opacity':
-                    if tab is not None:
-                        tab.set_needs_render()
-                    animation = NumericAnimation(old_value, new_value, num_frames)
-                    node.animations[property] = animation
-                    value = animation.animate()
-                    if value is not None:
-                        node.style[property] = value
-        node.old_style = dict(node.style)
+        if isinstance(node, Element) and "style" in node.attributes:
+            # Properties from the style attribute
+            pairs = CSSParser(node.attributes["style"]).body()
+            for property, value in pairs.items():
+                new_style[property] = value
+
+        # Handle percentage font-size
+        if new_style["font-size"].endswith("%"):
+            if node.parent:
+                parent_field = node.parent.style["font-size"]
+                parent_font_size = parent_field.read(notify=node.style["font-size"])
+            else:
+                parent_font_size = INHERITED_PROPERTIES["font-size"]
+            node_pct = float(new_style["font-size"][:-1]) / 100
+            parent_px = float(parent_font_size[:-2])
+            new_style["font-size"] = str(node_pct * parent_px) + "px"
+
+        # CSS transitions
+        if not hasattr(node, 'animations'):
+            try:
+                # Attach animations dict lazily; callers may not be Element/Text
+                node.animations = {}
+            except Exception:
+                pass
+
+        if 'style' in dir(node) and isinstance(node, Element):
+            old_style = getattr(node, 'old_style', None)
+            if old_style:
+                transitions = diff_styles(old_style, new_style)
+                for property, (old_value, new_value, num_frames) in transitions.items():
+                    if property == 'opacity':
+                        if tab is not None:
+                            tab.set_needs_render()
+                        animation = NumericAnimation(old_value, new_value, num_frames)
+                        node.animations[property] = animation
+                        value = animation.animate()
+                        if value is not None:
+                            new_style[property] = value
+            node.old_style = dict(new_style)
+
+        # Set each field individually
+        for property, field in node.style.items():
+            field.set(new_style[property])
 
     for child in node.children:
         style(child, rules, tab)
+
+def dirty_style(node):
+    for property, value in node.style.items():
+        value.mark()

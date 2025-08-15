@@ -294,6 +294,26 @@ class DrawLine(PaintCommand):
         )
         canvas.drawPath(path, paint)
 
+def parse_image_rendering(quality):
+   if quality == "high-quality":
+       return skia.FilterQuality.kHigh_FilterQuality
+   elif quality == "crisp-edges":
+       return skia.FilterQuality.kLow_FilterQuality
+   else:
+       return skia.FilterQuality.kMedium_FilterQuality
+
+class DrawImage(PaintCommand):
+    def __init__(self, image, rect, quality):
+        super().__init__(rect)
+        self.image = image
+        self.quality = parse_image_rendering(quality)
+
+    def execute(self, canvas):
+        paint = skia.Paint(
+            FilterQuality=self.quality,
+        )
+        canvas.drawImageRect(self.image, self.rect, paint)
+
 class Opacity(VisualEffect):
     def __init__(self, opacity, children, node=None):
         self.opacity = opacity
@@ -367,25 +387,42 @@ class Blend(VisualEffect):
             return rect
 
 def paint_tree(layout_object, display_list):
-    cmds = []
-    if layout_object.should_paint():
-        cmds = layout_object.paint()
-    for child in layout_object.children:
-        paint_tree(child, cmds)
+    cmds = layout_object.paint()
 
-    if layout_object.should_paint():
-        cmds = layout_object.paint_effects(cmds)
+    if IframeLayout and isinstance(layout_object, IframeLayout) and \
+        layout_object.node.frame and \
+        layout_object.node.frame.loaded:
+        paint_tree(layout_object.node.frame.document, cmds)
+    else:
+        for child in layout_object.children:
+            paint_tree(child, cmds)
+
+    cmds = layout_object.paint_effects(cmds)
     display_list.extend(cmds)
 
-def paint_visual_effects(node, cmds, rect):
-    opacity = float(node.style.get("opacity", "1.0"))
-    blend_mode = node.style.get("mix-blend-mode")
+def DrawCursor(elt, offset):
+    x = elt.x + offset
+    return DrawLine(x, elt.y, x, elt.y + elt.height, "red", 1)
 
-    if node.style.get("overflow", "visible") == "clip":
+def paint_outline(node, cmds, rect, zoom):
+    outline = node.style.get("outline", "")
+    if outline and outline != "none":
+        # Parse outline: width style color
+        parts = outline.split()
+        if len(parts) >= 3:
+            width = float(parts[0][:-2]) * zoom
+            color = parts[2]
+            cmds.append(DrawOutline(rect, color, width))
+    return cmds
+
+def paint_visual_effects(node, cmds, rect):
+    opacity = float(node.style["opacity"].get())
+    blend_mode = node.style["mix-blend-mode"].get()
+
+    if node.style["overflow"].get() == "clip":
         if not blend_mode:
             blend_mode = "source-over"
-        border_radius = float(node.style.get(
-            "border-radius", "0px")[:-2])
+        border_radius = float(node.style["border-radius"].get()[:-2])
         cmds.append(Blend(1.0, "destination-in", node, [
             DrawRRect(rect, border_radius, "white")
         ]))
@@ -396,7 +433,7 @@ def paint_visual_effects(node, cmds, rect):
     except Exception:
         pass
     # Transform wrapper
-    translation = parse_transform(node.style.get("transform", ""))
+    translation = parse_transform(node.style["transform"].get())
     return [Transform(translation, rect, node, [blend_op])]
 
 def parse_transform(transform_str):
@@ -464,6 +501,12 @@ def absolute_to_local(display_item, rect):
     for parent in reversed(parent_chain):
         rect = parent.unmap(rect)
     return rect
+
+# Import at the end to avoid circular imports
+try:
+    from layout.iframe_layout import IframeLayout
+except ImportError:
+    IframeLayout = None
 
 class CompositedLayer:
     def __init__(self, skia_context, display_item):

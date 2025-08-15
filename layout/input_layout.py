@@ -1,20 +1,24 @@
 import skia
-from draw import DrawLine, DrawRect, DrawText, linespace
+from draw import DrawLine, DrawRect, DrawText, linespace, DrawCursor
 from font_cache import get_font
 from htmltree.text import Text
+<<<<<<< HEAD
 from draw import paint_visual_effects, paint_outline
 from utils import dpx
+=======
+from draw import paint_visual_effects
+from layout.embed_layout import EmbedLayout, dpx
+from protected_field import ProtectedField
+>>>>>>> 3e07826 (Done with the project, pretty good book)
 
 INPUT_WIDTH_PX = 200
 
-class InputLayout:
+class InputLayout(EmbedLayout):
     def __init__(self, node, parent, previous):
-        self.node = node
-        self.children = []
-        self.parent = parent
-        self.previous = previous
+        super().__init__(node, parent, previous, None)
 
     def layout(self):
+<<<<<<< HEAD
         self.zoom = getattr(self.parent, 'zoom', 1)
         weight = self.node.style["font-weight"]
         style = self.node.style["font-style"]
@@ -29,6 +33,18 @@ class InputLayout:
         else:
             self.x = self.parent.x
         self.height = linespace(self.font) 
+=======
+        super().layout()
+        zoom = self.zoom.read(notify=self.width)
+        self.width.set(dpx(INPUT_WIDTH_PX, zoom))
+
+        font = self.font.read(notify=self.height)
+        self.height.set(linespace(font))
+
+        height = self.height.read(notify=self.ascent)
+        self.ascent.set(-height)
+        self.descent.set(0) 
+>>>>>>> 3e07826 (Done with the project, pretty good book)
 
     def paint(self):
         cmds = []
@@ -45,9 +61,10 @@ class InputLayout:
             else:
                 print("Ignoring HTML contents inside button")
                 text = ""
-        color = self.node.style["color"]
-        cmds.append(DrawText(self.x, self.y, text, self.font, color))
+        color = self.node.style["color"].get()
+        cmds.append(DrawText(self.x.get(), self.y.get(), text, self.font.get(), color))
 
+<<<<<<< HEAD
         if getattr(self.node, 'is_focused', False) and self.node.tag == "input":
             cx = self.x + self.font.measureText(text)
             cmds.append(DrawLine(
@@ -69,3 +86,10 @@ class InputLayout:
             self.node, cmds, self.self_rect())
         paint_outline(self.node, cmds, self.self_rect(), getattr(self, 'zoom', 1))
         return cmds
+=======
+        if self.node.is_focused and self.node.tag == "input":
+            cmds.append(DrawCursor(self, self.font.get().measureText(text)))
+
+        return cmds
+
+>>>>>>> 3e07826 (Done with the project, pretty good book)

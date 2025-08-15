@@ -1,6 +1,9 @@
 def tree_to_list(tree, list):
     list.append(tree)
-    for child in tree.children:
+    children = tree.children
+    if hasattr(children, 'get'):
+        children = children.get()
+    for child in children:
         tree_to_list(child, list)
     return list
 
